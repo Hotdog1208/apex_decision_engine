@@ -1,0 +1,106 @@
+{
+  "underlying": "AAPL",
+  "underlying_price": 185.50,
+  "timestamp": "2025-02-13T09:30:00Z",
+  "expirations": ["2025-02-21", "2025-03-21", "2025-04-18"],
+  "calls": [
+    {
+      "symbol": "AAPL250221C00180000",
+      "strike": 180.0,
+      "expiration": "2025-02-21",
+      "bid": 6.20,
+      "ask": 6.40,
+      "last": 6.30,
+      "volume": 1200,
+      "open_interest": 8500,
+      "implied_volatility": 0.22,
+      "delta": 0.72
+    },
+    {
+      "symbol": "AAPL250221C00185000",
+      "strike": 185.0,
+      "expiration": "2025-02-21",
+      "bid": 3.40,
+      "ask": 3.60,
+      "last": 3.50,
+      "volume": 2500,
+      "open_interest": 15200,
+      "implied_volatility": 0.21,
+      "delta": 0.52
+    },
+    {
+      "symbol": "AAPL250221C00190000",
+      "strike": 190.0,
+      "expiration": "2025-02-21",
+      "bid": 1.45,
+      "ask": 1.60,
+      "last": 1.52,
+      "volume": 1800,
+      "open_interest": 22000,
+      "implied_volatility": 0.20,
+      "delta": 0.30
+    },
+    {
+      "symbol": "AAPL250321C00185000",
+      "strike": 185.0,
+      "expiration": "2025-03-21",
+      "bid": 5.80,
+      "ask": 6.00,
+      "last": 5.90,
+      "volume": 950,
+      "open_interest": 12500,
+      "implied_volatility": 0.23,
+      "delta": 0.58
+    },
+    {
+      "symbol": "AAPL250321C00190000",
+      "strike": 190.0,
+      "expiration": "2025-03-21",
+      "bid": 3.60,
+      "ask": 3.80,
+      "last": 3.70,
+      "volume": 1100,
+      "open_interest": 18200,
+      "implied_volatility": 0.22,
+      "delta": 0.42
+    }
+  ],
+  "puts": [
+    {
+      "symbol": "AAPL250221P00180000",
+      "strike": 180.0,
+      "expiration": "2025-02-21",
+      "bid": 1.20,
+      "ask": 1.35,
+      "last": 1.28,
+      "volume": 800,
+      "open_interest": 9500,
+      "implied_volatility": 0.23,
+      "delta": -0.28
+    },
+    {
+      "symbol": "AAPL250221P00185000",
+      "strike": 185.0,
+      "expiration": "2025-02-21",
+      "bid": 2.90,
+      "ask": 3.10,
+      "last": 3.00,
+      "volume": 2100,
+      "open_interest": 18800,
+      "implied_volatility": 0.22,
+      "delta": -0.48
+    },
+    {
+      "symbol": "AAPL250221P00190000",
+      "strike": 190.0,
+      "expiration": "2025-02-21",
+      "bid": 5.50,
+      "ask": 5.70,
+      "last": 5.60,
+      "volume": 650,
+      "open_interest": 12000,
+      "implied_volatility": 0.21,
+      "delta": -0.70
+    }
+  ]
+}

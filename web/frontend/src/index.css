@@ -1,0 +1,107 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  font-family: 'Inter', system-ui, sans-serif;
+
+  /* Backgrounds */
+  --bg-primary: #0A0A0A;
+  --bg-secondary: #141414;
+  --bg-tertiary: #1E1E1E;
+  --border-primary: rgba(255, 255, 255, 0.08);
+  --border-secondary: rgba(255, 255, 255, 0.04);
+
+  /* Text */
+  --text-primary: #FFFFFF;
+  --text-secondary: rgba(255, 255, 255, 0.70);
+  --text-tertiary: rgba(255, 255, 255, 0.45);
+
+  /* Accent - Electric Lime */
+  --accent-primary: #CCFF00;
+  --accent-primary-hover: #D4FF33;
+  --accent-primary-muted: rgba(204, 255, 0, 0.15);
+
+  /* Functional */
+  --color-profit: #00FF88;
+  --color-profit-muted: rgba(0, 255, 136, 0.15);
+  --color-loss: #FF3366;
+  --color-loss-muted: rgba(255, 51, 102, 0.15);
+  --color-warning: #FFB800;
+  --color-warning-muted: rgba(255, 184, 0, 0.15);
+  --color-info: #00A8FF;
+
+  /* Typography */
+  --font-display: 'Space Grotesk', sans-serif;
+  --font-data: 'JetBrains Mono', monospace;
+  --font-body: 'Inter', sans-serif;
+
+  --font-size-display: clamp(3rem, 8vw, 8rem);
+  --font-size-h1: clamp(2rem, 5vw, 4rem);
+  --font-size-h2: clamp(1.5rem, 3vw, 2.5rem);
+  --font-size-data-lg: 3rem;
+  --font-size-data-md: 2rem;
+  --font-size-data-sm: 1.25rem;
+  --letter-spacing-display: -0.03em;
+}
+
+body {
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: var(--font-body);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.font-display { font-family: var(--font-display); }
+.font-data { font-family: var(--font-data); }
+.font-body { font-family: var(--font-body); }
+
+/* Override Tailwind apex colors to use CSS vars */
+.text-apex-accent { color: var(--accent-primary); }
+.bg-apex-accent { background-color: var(--accent-primary); }
+.bg-apex-accent\/20 { background-color: var(--accent-primary-muted); }
+.hover\:bg-apex-accent:hover { background-color: var(--accent-primary-hover); }
+.text-apex-profit { color: var(--color-profit); }
+.bg-apex-profit\/20 { background-color: var(--color-profit-muted); }
+.text-apex-loss { color: var(--color-loss); }
+.bg-apex-loss\/20 { background-color: var(--color-loss-muted); }
+.text-apex-warning { color: var(--color-warning); }
+.bg-apex-dark { background-color: var(--bg-secondary); }
+.bg-apex-darker { background-color: var(--bg-primary); }
+
+.profit { color: var(--color-profit); }
+.loss { color: var(--color-loss); }
+.warning { color: var(--color-warning); }
+
+/* Skeleton shimmer */
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+.skeleton {
+  background: linear-gradient(90deg, var(--bg-tertiary) 0%, #2A2A2A 50%, var(--bg-tertiary) 100%);
+  background-size: 200% 100%;
+  animation: shimmer 2s linear infinite;
+  border-radius: 4px;
+}
+
+/* Light theme overrides */
+html.light {
+  --bg-primary: #f8fafc;
+  --bg-secondary: #f1f5f9;
+  --bg-tertiary: #e2e8f0;
+  --text-primary: #0f172a;
+  --text-secondary: #475569;
+  --text-tertiary: #64748b;
+  --border-primary: rgba(0, 0, 0, 0.08);
+}
+html.light body { background: var(--bg-primary); color: var(--text-primary); }
+html.light .bg-apex-darker { background: var(--bg-primary) !important; }
+html.light .bg-apex-dark { background: var(--bg-secondary) !important; }
+html.light .text-white { color: var(--text-primary) !important; }
+html.light .text-slate-400 { color: var(--text-secondary) !important; }
+html.light .text-slate-300 { color: var(--text-secondary) !important; }
+html.light .text-slate-500 { color: var(--text-tertiary) !important; }
+html.light nav { background: rgba(248, 250, 252, 0.95) !important; border-color: var(--border-primary) !important; }
+html.light .border-slate-700\/50 { border-color: var(--border-primary) !important; }

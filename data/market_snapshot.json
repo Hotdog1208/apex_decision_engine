@@ -1,0 +1,87 @@
+{
+  "timestamp": "2025-02-13T09:30:00Z",
+  "stocks": [
+    {
+      "symbol": "AAPL",
+      "price": 185.50,
+      "bid": 185.48,
+      "ask": 185.52,
+      "volume": 2500000,
+      "sector": "Technology",
+      "returns_20d": 0.045,
+      "returns_10d": 0.022,
+      "volatility_20d": 0.18,
+      "volatility_10d": 0.15,
+      "high_20d": 188.20,
+      "low_20d": 172.10,
+      "close_prev": 184.20
+    },
+    {
+      "symbol": "MSFT",
+      "price": 415.30,
+      "bid": 415.25,
+      "ask": 415.35,
+      "volume": 1800000,
+      "sector": "Technology",
+      "returns_20d": 0.038,
+      "returns_10d": 0.018,
+      "volatility_20d": 0.16,
+      "volatility_10d": 0.14,
+      "high_20d": 422.00,
+      "low_20d": 398.50,
+      "close_prev": 414.10
+    },
+    {
+      "symbol": "NVDA",
+      "price": 875.20,
+      "bid": 875.00,
+      "ask": 875.40,
+      "volume": 3200000,
+      "sector": "Technology",
+      "returns_20d": 0.122,
+      "returns_10d": 0.065,
+      "volatility_20d": 0.35,
+      "volatility_10d": 0.28,
+      "high_20d": 890.00,
+      "low_20d": 720.00,
+      "close_prev": 868.50
+    },
+    {
+      "symbol": "JPM",
+      "price": 198.40,
+      "bid": 198.35,
+      "ask": 198.45,
+      "volume": 4200000,
+      "sector": "Financials",
+      "returns_20d": -0.012,
+      "returns_10d": -0.008,
+      "volatility_20d": 0.14,
+      "volatility_10d": 0.12,
+      "high_20d": 205.00,
+      "low_20d": 192.00,
+      "close_prev": 199.20
+    },
+    {
+      "symbol": "XOM",
+      "price": 108.75,
+      "bid": 108.70,
+      "ask": 108.80,
+      "volume": 5800000,
+      "sector": "Energy",
+      "returns_20d": 0.028,
+      "returns_10d": 0.015,
+      "volatility_20d": 0.12,
+      "volatility_10d": 0.10,
+      "high_20d": 112.00,
+      "low_20d": 102.50,
+      "close_prev": 108.20
+    }
+  ],
+  "price_history": {
+    "AAPL": [172.10, 174.50, 176.20, 178.90, 181.20, 182.50, 180.30, 183.10, 185.00, 184.20, 185.50],
+    "MSFT": [398.50, 402.00, 405.50, 408.00, 410.20, 412.00, 409.50, 411.00, 413.50, 414.10, 415.30],
+    "NVDA": [720.00, 765.00, 810.00, 835.00, 850.00, 865.00, 855.00, 868.00, 872.00, 868.50, 875.20],
+    "JPM": [192.00, 195.00, 198.00, 202.00, 205.00, 201.00, 198.50, 199.50, 199.00, 199.20, 198.40],
+    "XOM": [102.50, 104.00, 105.50, 107.00, 108.00, 110.00, 109.50, 108.50, 108.20, 108.20, 108.75]
+  }
+}
