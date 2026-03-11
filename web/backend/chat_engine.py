@@ -1,221 +1,169 @@
 """
 AI Trading Chatbot for Apex Decision Engine.
-Uses OpenAI API (GPT-4o) with function calling. Claude can be added via ANTHROPIC_API_KEY.
+Uses Google Gemini API with RAG (Retrieval-Augmented Generation) pipeline.
 """
 
 import json
 import os
+import logging
 from typing import Any, Callable, Dict, List
+import google.generativeai as genai
+from engine.ml_models.uoa_xgboost import UOAModelPipeline
 
-CHAT_SYSTEM_PROMPT = """You are a professional trading analyst and market intelligence assistant for Apex Decision Engine (ADE).
+logger = logging.getLogger(__name__)
 
-Your core competencies:
-- Technical analysis (support/resistance, indicators, chart patterns)
-- Options analysis (Greeks, IV analysis, strategy selection)
-- Risk management (position sizing, stop placement, R:R ratios)
-- Market structure (internals, breadth, sector rotation)
-- Sentiment analysis (news, flow)
+CHAT_SYSTEM_PROMPT = """You are a professional Institutional Risk Manager and trading analyst for the Apex Decision Engine (ADE).
 
-Your personality:
-- Professional but conversational (not robotic)
-- Honest about uncertainty (give confidence scores 0-100 when relevant)
-- Educational (explain WHY, not just WHAT)
-- Risk-aware (always mention downside)
-- Proactive (ask clarifying questions when needed)
+Your Role:
+Provide data-driven trading intelligence, focusing specifically on Unusual Options Activity (UOA), predictive ML models (XGBoost), and live market data.
 
-Critical rules:
-- NEVER give definitive predictions ("will go up" → "could test resistance")
-- Use confidence scores (0-100) when assessing trades or setups
-- ALWAYS mention key risks
-- NEVER guarantee profits
-- End analysis with: "This is analysis, not financial advice."
+Formatting Rules - YOU MUST FORMAT YOUR RESPONSE EXACTLY LIKE THIS:
+### The Smart Money Data
+(Explain the latest UOA anomaly data provided in the context. Discuss volume vs open interest, moneyness, and how smart money is positioned).
 
-You have access to real-time market data via tools. Use them when the user asks about prices, options, or trade ideas."""
+### The Predictive Score
+(Discuss the XGBoost probability score provided in the context. Is it a high-conviction breakout signal? Do the technicals align with the flow?)
 
-OPENAI_TOOLS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "get_stock_quote",
-            "description": "Get real-time price, bid, ask, and volume for a stock symbol.",
-            "parameters": {
-                "type": "object",
-                "properties": {"symbol": {"type": "string", "description": "Stock ticker e.g. AAPL"}},
-                "required": ["symbol"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_option_chain",
-            "description": "Get option chain with strikes and Greeks for a symbol.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "symbol": {"type": "string", "description": "Underlying ticker e.g. AAPL"},
-                },
-                "required": ["symbol"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_market_snapshot",
-            "description": "Get current market snapshot: multiple stocks with prices and volume.",
-            "parameters": {"type": "object", "properties": {}},
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "run_ade_analysis",
-            "description": "Run full ADE decision engine: signals, scoring, and trade ideas.",
-            "parameters": {"type": "object", "properties": {}},
-        },
-    },
-]
+### Risk Management (Stop Loss / Take Profit)
+(Provide actionable risk management advice based on the provided price action. Where is the logical stop loss? What is the logical take profit? Consider support/resistance and volatility).
 
+Critical Rules:
+- NEVER give generic financial advice.
+- ONLY base your analysis on the concrete mathematical data provided in the System Prompt Context.
+- Do NOT generate generic responses. If no context is provided, state that you need data to run analysis.
+- End your analysis with: "*This is analysis based on mathematical probabilities, not financial advice.*"
+"""
 
-def run_tool(
-    name: str,
-    arguments: Dict[str, Any],
-    get_engine: Callable,
-    connector: Any,
-) -> str:
-    """Execute a tool and return JSON string result."""
-    try:
-        if name == "get_stock_quote":
-            symbol = arguments.get("symbol", "").upper()
-            data = connector.market_data.fetch_quote(symbol)
-            return json.dumps(data)
+def extract_ticker(message: str) -> str:
+    """Attempt to extract a ticker symbol from the user's message."""
+    known = ("AAPL", "MSFT", "NVDA", "JPM", "XOM", "GOOGL", "META", "TSLA", "AMZN", "SPY")
+    for w in message.upper().replace('?','').replace('.','').replace(',','').split():
+        if w in known or (len(w) <= 4 and w.isalpha()):
+            # We just return the first uppercase looking ticker, favoring known if possible
+            if w in known:
+                return w
+    
+    # Fallback to TSLA or whatever is in the message
+    for w in message.upper().split():
+        if len(w) <= 4 and w.isalpha():
+            return w
+    return ""
 
-        if name == "get_option_chain":
-            symbol = arguments.get("symbol", "").upper()
-            data = connector.market_data.fetch_option_chain(symbol)
-            out = {
-                "underlying": data.get("underlying"),
-                "underlying_price": data.get("underlying_price"),
-                "calls_count": len(data.get("calls", [])),
-                "puts_count": len(data.get("puts", [])),
-                "sample_calls": data.get("calls", [])[:5],
-                "sample_puts": data.get("puts", [])[:5],
-            }
-            return json.dumps(out)
-
-        if name == "get_market_snapshot":
-            data = connector.market_data.fetch_market_snapshot()
-            stocks = data.get("stocks", [])[:10]
-            return json.dumps({"stocks": stocks, "timestamp": data.get("timestamp")})
-
-        if name == "run_ade_analysis":
-            eng = get_engine()
-            output = eng.run()
-            trades = output.trade_outputs[:10]
-            summary = {
-                "signals_count": len(output.signals),
-                "allocated_trades_count": len(trades),
-                "trades": [
-                    {
-                        "symbol": t.get("symbol"),
-                        "strategy": t.get("strategy"),
-                        "direction": t.get("direction"),
-                        "confidence_score": t.get("confidence_score"),
-                        "capital_allocated": t.get("capital_allocated"),
-                    }
-                    for t in trades
-                ],
-            }
-            return json.dumps(summary)
-
-        return json.dumps({"error": f"Unknown tool: {name}"})
-    except Exception as e:
-        return json.dumps({"error": str(e)})
-
+def build_rag_context(user_message: str, connector: Any) -> str:
+    """Build the RAG context string by querying local data and the ML model."""
+    ticker = extract_ticker(user_message)
+    context_blocks = []
+    
+    # 1. Read UOA Anomalies
+    uoa_file = connector.data_dir / "uoa_anomalies.json"
+    anomalies = []
+    if uoa_file.exists():
+        try:
+            with open(uoa_file, "r") as f:
+                data = json.load(f)
+                if ticker:
+                    anomalies = [a for a in data if a.get("ticker") == ticker]
+                if not anomalies:
+                    anomalies = data[-5:]  # Get the last 5 if no ticker match
+        except Exception as e:
+            logger.error(f"Failed to load UOA data: {e}")
+            
+    if not anomalies:
+        context_blocks.append("No recent UOA anomalies found in the local database.")
+    else:
+        context_blocks.append("Recent UOA Anomalies:")
+        for a in anomalies[-3:]:
+            context_blocks.append(json.dumps(a))
+            
+    # 2. ML Probability Score
+    if anomalies:
+        try:
+            ml_pipeline = UOAModelPipeline(data_source=os.environ.get("DATA_SOURCE", "mock"))
+            ml_pipeline.load_model()
+            
+            # Predict the most recent anomaly
+            latest_anomaly = anomalies[-1]
+            target_ticker = latest_anomaly.get("ticker", ticker)
+            
+            # We need recent history to engineer features
+            hist = connector.market_data.fetch_ohlc(target_ticker, period="3mo", interval="1d")
+            series = hist.get("series", [])
+            
+            if series:
+                prob = ml_pipeline.predict(latest_anomaly, series)
+                context_blocks.append(f"XGBoost Predictive Score for {target_ticker}: {prob*100:.2f}% probability of 3%+ directional breakout.")
+            else:
+                context_blocks.append(f"Could not fetch history for {target_ticker} to calculate ML score.")
+        except Exception as e:
+            logger.error(f"Failed to run ML prediction: {e}")
+            context_blocks.append("ML Pipeline temporarily unavailable.")
+            
+    # 3. Live Market Data
+    if ticker:
+        try:
+            quote = connector.market_data.fetch_quote(ticker)
+            context_blocks.append(f"Live Market Data for {ticker}: {json.dumps(quote)}")
+        except Exception as e:
+            logger.error(f"Failed to fetch market data: {e}")
+            
+    full_context = "\\n".join(context_blocks)
+    return full_context
 
 def _demo_reply(user_message: str, get_engine: Callable, connector: Any) -> str:
-    """Smart demo responses when OpenAI is not configured."""
+    """Smart demo responses when Gemini is not configured."""
     msg = (user_message or "").lower().strip()
-    # Run ADE analysis for relevant queries
-    if any(w in msg for w in ["ade", "analyze", "run analysis", "scan", "signals", "trade ideas", "recommendations"]):
-        try:
-            eng = get_engine()
-            output = eng.run()
-            trades = output.trade_outputs[:5]
-            lines = [f"**ADE Analysis** ({len(output.signals)} signals)\n"]
-            for t in trades:
-                lines.append(f"• {t.get('symbol')} {t.get('strategy')} {t.get('direction')} — Confidence {t.get('confidence_score', 0):.0f}/100")
-            lines.append("\n*Set OPENAI_API_KEY for full AI analysis.*")
-            return "\n".join(lines)
-        except Exception as e:
-            return f"ADE analysis failed: {e}. *Set OPENAI_API_KEY for full AI.*"
-    if any(w in msg for w in ["iv rank", "iv percentile", "delta", "theta", "vega", "greeks", "options"]):
-        return "**Options 101:** IV Rank = where current IV sits in 52wk range. Delta = sensitivity to $1 underlying move. Theta = time decay. Vega = sensitivity to 1% IV change.\n\n*Set OPENAI_API_KEY for detailed options analysis.*"
-    if any(w in msg for w in ["risk", "position size", "stop loss", "r:r"]):
-        return "Use the **Risk Tools** page for position sizing and R:R calculator. Rule of thumb: risk 1–2% per trade, aim for R:R ≥ 1.5.\n\n*Set OPENAI_API_KEY for personalized risk advice.*"
-    if any(w in msg for w in ["price", "quote", "aapl", "msft", "nvda", "stock", "trading"]):
-        try:
-            known = ("AAPL", "MSFT", "NVDA", "JPM", "XOM", "GOOGL", "META", "TSLA", "AMZN", "SPY")
-            sym = "AAPL"
-            for w in msg.upper().split():
-                if w in known:
-                    sym = w
-                    break
-            data = connector.market_data.fetch_quote(sym)
-            return f"**{sym}** ${data.get('price', 0):.2f} (Vol: {data.get('volume', 0):,})\n\n*Set OPENAI_API_KEY for full market commentary.*"
-        except Exception:
-            pass
-    return "I'm the ADE Trading Assistant. Ask about trades, run ADE analysis, or request market data.\n\n*Set OPENAI_API_KEY in your environment to enable full AI responses.*"
-
+    return "I am the ADE Institutional Risk Manager. Please set the GEMINI_API_KEY in the .env file to enable the RAG Chatbot."
 
 async def chat_completion(
     messages: List[Dict[str, str]],
     get_engine: Callable,
     connector: Any,
 ) -> str:
-    """Call OpenAI API with tool use. Returns full assistant reply."""
-    api_key = os.environ.get("OPENAI_API_KEY", "").strip()
+    """Call Google Gemini API with RAG context."""
+    api_key = os.environ.get("GEMINI_API_KEY", "").strip()
     if not api_key:
         last_msg = (messages[-1].get("content", "") or "").strip() if messages else ""
         return _demo_reply(last_msg, get_engine, connector)
 
     try:
-        from openai import AsyncOpenAI
-        client = AsyncOpenAI(api_key=api_key)
-    except ImportError:
-        return "[Install openai: pip install openai]"
+        genai.configure(api_key=api_key)
+        model_name = os.environ.get("GEMINI_CHAT_MODEL", "gemini-1.5-pro")
+        model = genai.GenerativeModel(model_name)
+    except Exception as e:
+        return f"[Error configuring Gemini API: {e}]"
 
-    all_messages = [{"role": "system", "content": CHAT_SYSTEM_PROMPT}] + messages
-    max_iterations = 5
-    iteration = 0
+    # Extract user message
+    user_message = next((m.get("content", "") for m in reversed(messages) if m.get("role") == "user"), "")
+    
+    # Build RAG Context
+    rag_context = build_rag_context(user_message, connector)
+    
+    # Inject context into system prompt instruction
+    system_instruction = CHAT_SYSTEM_PROMPT + "\\n\\n--- CURRENT RAG CONTEXT DATA ---\\n" + rag_context
+    
+    # Format messages for Gemini
+    # Gemini uses 'user' and 'model' as roles. And 'developer' or 'system' logic is often passed as a system instruction (available in v1.5 API) or prepended.
+    # We will prepend it to the user's context for max compatibility.
+    
+    # If the model strongly supports system_instruction, we could pass it in GenerativeModel, but prepending to the first user prompt is robust.
+    gemini_messages = []
+    
+    # Start with the system prompt injected into the FIRST user message
+    first_user_found = False
+    
+    for msg in messages:
+        role = "user" if msg.get("role") == "user" else "model"
+        content = msg.get("content", "")
+        
+        if role == "user" and not first_user_found:
+            content = f"SYSTEM INSTRUCTIONS:\\n{system_instruction}\\n\\nUSER QUERY:\\n{content}"
+            first_user_found = True
+            
+        gemini_messages.append({"role": role, "parts": [content]})
 
-    while iteration < max_iterations:
-        iteration += 1
-        response = await client.chat.completions.create(
-            model=os.environ.get("OPENAI_CHAT_MODEL", "gpt-4o-mini"),
-            messages=all_messages,
-            tools=OPENAI_TOOLS,
-            tool_choice="auto",
-        )
-        choice = response.choices[0]
-        msg = choice.message
-        if msg.tool_calls:
-            all_messages.append({
-                "role": "assistant",
-                "content": msg.content or "",
-                "tool_calls": [
-                    {"id": tc.id, "type": "function", "function": {"name": tc.function.name, "arguments": tc.function.arguments}}
-                    for tc in msg.tool_calls
-                ],
-            })
-            for tc in msg.tool_calls:
-                try:
-                    args = json.loads(tc.function.arguments or "{}")
-                except json.JSONDecodeError:
-                    args = {}
-                result = run_tool(tc.function.name, args, get_engine, connector)
-                all_messages.append({"role": "tool", "tool_call_id": tc.id, "content": result})
-            continue
-        return (msg.content or "").strip()
-    return ""
+    try:
+        response = model.generate_content(gemini_messages)
+        return response.text
+    except Exception as e:
+        logger.error(f"Gemini API Error: {e}")
+        return f"Error communicating with Gemini: {e}"

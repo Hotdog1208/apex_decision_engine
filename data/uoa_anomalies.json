@@ -1,0 +1,12 @@
+[
+    {
+        "ticker": "TSLA",
+        "type": "CALL",
+        "strike": 250,
+        "expiry": "2026-03-20",
+        "volume": 15000,
+        "open_interest": 1000,
+        "iv": 0.85,
+        "timestamp": 1710180000
+    }
+]

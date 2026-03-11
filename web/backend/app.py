@@ -9,25 +9,25 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 # Load .env from project root so API keys and secrets are available
-from dotenv import load_dotenv
+from dotenv import load_dotenv  # type: ignore
 load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env")
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-
-# Add project root to path
+# Add project root to path BEFORE local imports
 import sys
 project_root = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(project_root))
 
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect  # type: ignore
+from fastapi.middleware.cors import CORSMiddleware  # type: ignore
+from pydantic import BaseModel  # type: ignore
+
 import os
-from config.system_config import get_default_system_config
-from engine.core.decision_engine import DecisionEngine
-from engine.core.performance_engine import PerformanceEngine
-from engine.api import MockETradeConnector, YahooConnector
-from web.backend.chat_engine import chat_completion
-from web.backend.data_services import (
+from config.system_config import get_default_system_config  # type: ignore
+from engine.core.decision_engine import DecisionEngine  # type: ignore
+from engine.core.performance_engine import PerformanceEngine  # type: ignore
+from engine.api import MockETradeConnector, YahooConnector  # type: ignore
+from web.backend.chat_engine import chat_completion  # type: ignore
+from web.backend.data_services import (  # type: ignore
     get_mock_alerts,
     get_news as fetch_news,
     get_calendar as fetch_calendar,
@@ -83,8 +83,8 @@ async def startup():
         logger.info("Live market data: Yahoo Finance (charts, screener, heatmap, quotes)")
     if (os.environ.get("FINNHUB_API_KEY") or "").strip():
         logger.info("News & calendar: Finnhub enabled")
-    if (os.environ.get("OPENAI_API_KEY") or "").strip():
-        logger.info("Chat: OpenAI enabled")
+    if (os.environ.get("GEMINI_API_KEY") or "").strip():
+        logger.info("Chat: Gemini enabled")
 
 
 # --- Routes ---
@@ -178,7 +178,8 @@ async def close_trade(trade_id: str, exit_reason: str = "manual") -> Dict[str, A
         if t.get("trade_id") == trade_id:
             t["lifecycle_state"] = "closed"
             t["exit_reason"] = exit_reason
-            t["exit_time"] = __import__("datetime").datetime.utcnow().isoformat() + "Z"
+            from datetime import datetime
+            t["exit_time"] = datetime.utcnow().isoformat() + "Z"
             for ws in websocket_clients:
                 try:
                     await ws.send_json({"event": "trade_closed", "trade": t})
@@ -222,7 +223,7 @@ async def get_signals() -> Dict[str, Any]:
     eng = get_engine()
     output = eng.run()
     return {
-        "signals": [s.to_dict() if hasattr(s, "to_dict") else str(s) for s in output.signals],
+        "signals": [s.to_dict() if type(s).__name__ != "str" and hasattr(s, "to_dict") else str(s) for s in output.signals], # pyre-ignore[16]
         "count": len(output.signals),
     }
 
@@ -236,7 +237,7 @@ async def get_config() -> Dict[str, Any]:
         "live_services": {
             "market_data": cfg.data_source == "yahoo",
             "news_calendar": bool((os.environ.get("FINNHUB_API_KEY") or "").strip()),
-            "chat_ai": bool((os.environ.get("OPENAI_API_KEY") or "").strip()),
+            "chat_ai": bool((os.environ.get("GEMINI_API_KEY") or "").strip()),
         },
         "scoring_weights": {
             "structure": cfg.scoring.structure_weight,
@@ -281,8 +282,8 @@ async def websocket_endpoint(websocket: WebSocket):
 # --- Auth (simple JWT, in-memory users) ---
 import os
 from datetime import datetime, timedelta
-from jose import JWTError, jwt
-from passlib.context import CryptContext
+from jose import JWTError, jwt  # type: ignore
+from passlib.context import CryptContext  # type: ignore
 
 SECRET_KEY = os.environ.get("ADE_SECRET_KEY", "ade-dev-secret-change-in-production")
 ALGORITHM = "HS256"
@@ -339,7 +340,7 @@ async def chat(body: ChatMessage) -> Dict[str, Any]:
     if session_id not in chat_sessions:
         chat_sessions[session_id] = []
     chat_sessions[session_id].append({"role": "user", "content": body.message})
-    messages = chat_sessions[session_id][-20:]
+    messages = list(chat_sessions[session_id])[-20:] # pyre-ignore[16, 6]
     reply = await chat_completion(messages, get_engine, connector)
     chat_sessions[session_id].append({"role": "assistant", "content": reply})
     return {"reply": reply, "session_id": session_id}
@@ -373,7 +374,7 @@ async def news_route() -> Dict[str, Any]:
         return {"items": news or [], "count": len(news or [])}
     except Exception as e:
         logger.exception("News failed: %s", e)
-        from web.backend.data_services import get_mock_news
+        from web.backend.data_services import get_mock_news  # type: ignore
         fallback = get_mock_news()
         return {"items": fallback, "count": len(fallback)}
 
@@ -386,7 +387,7 @@ async def calendar_route() -> Dict[str, Any]:
         return {"items": items or [], "count": len(items or [])}
     except Exception as e:
         logger.exception("Calendar failed: %s", e)
-        from web.backend.data_services import get_mock_calendar
+        from web.backend.data_services import get_mock_calendar  # type: ignore
         fallback = get_mock_calendar()
         return {"items": fallback, "count": len(fallback)}
 
@@ -442,7 +443,8 @@ async def quote_route(symbol: str) -> Dict[str, Any]:
 async def quotes_route(symbols: str) -> Dict[str, Any]:
     """Batch quotes. Never 500."""
     try:
-        sym_list = [s.strip().upper() for s in (symbols or "").split(",") if s.strip()][:50]
+        sym_list = [s.strip().upper() for s in (symbols or "").split(",") if s.strip()]
+        sym_list = sym_list[:50] # pyre-ignore[16, 6]
         result = []
         for sym in sym_list:
             try:
@@ -512,13 +514,14 @@ class PriceAlertCreate(BaseModel):
 async def create_price_alert(body: PriceAlertCreate) -> Dict[str, Any]:
     """Create price alert."""
     target = body.target_price or body.price or 0
+    from datetime import datetime
     price_alerts.append({
         "id": f"pa-{len(price_alerts)}",
         "symbol": body.symbol,
         "condition": body.condition,
         "target_price": target,
         "price": target,
-        "created": __import__("datetime").datetime.utcnow().isoformat() + "Z",
+        "created": datetime.utcnow().isoformat() + "Z",
     })
     return {"alerts": price_alerts}
 
@@ -543,7 +546,7 @@ async def export_trades() -> Any:
     """Export trades as JSON."""
     eng = get_engine()
     output = eng.run()
-    from fastapi.responses import JSONResponse
+    from fastapi.responses import JSONResponse  # type: ignore
     return JSONResponse(
         content=output.trade_outputs,
         headers={"Content-Disposition": "attachment; filename=ade-trades.json"},
@@ -576,7 +579,7 @@ async def process_uoa_alert(anomaly: Dict[str, Any]) -> Dict[str, Any]:
         return {"status": "processed", "probability": prob}
     except Exception as e:
         logger.exception("Failed to process UOA anomaly: %s", e)
-        from fastapi import HTTPException
+        from fastapi import HTTPException  # type: ignore
         raise HTTPException(status_code=500, detail=str(e))
 
 
