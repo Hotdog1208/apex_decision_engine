@@ -21,7 +21,37 @@ export default function Alerts() {
       .finally(() => setLoading(false))
   }
 
-  useEffect(() => { load() }, [])
+  useEffect(() => {
+    load()
+
+    // Connect to WebSocket for real-time UOA alerts
+    const wsUrl = `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/api/ws`
+    const ws = new WebSocket(wsUrl)
+
+    ws.onmessage = (e) => {
+      try {
+        const msg = JSON.parse(e.data)
+        if (msg.event === 'high_conviction_uoa') {
+          const confidence = Math.round((msg.data.probability || 0) * 100)
+          const newAlert = {
+            id: `uoa-${Date.now()}`,
+            type: 'UOA_ALERT',
+            symbol: msg.data.anomaly.ticker || 'UNKNOWN',
+            confidence: confidence,
+            title: `High Conviction UOA Detected`,
+            message: `Massive ${msg.data.anomaly.type} activity. Vol/OI: ${msg.data.features?.vol_oi_ratio?.toFixed(2)}. Trend Alignment: ${msg.data.features?.trend_alignment}.`,
+            timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19),
+            action_url: `/charts?symbol=${msg.data.anomaly.ticker || 'SPY'}`
+          }
+          setAlerts(prev => [newAlert, ...prev])
+        }
+      } catch (err) { }
+    }
+
+    return () => {
+      ws.close()
+    }
+  }, [])
 
   return (
     <PageWrapper className="min-h-screen pb-32">
