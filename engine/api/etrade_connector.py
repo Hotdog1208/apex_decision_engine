@@ -76,6 +76,37 @@ class MockETradeConnector(ETradeConnector):
         return self._connected
 
 
+class YahooConnector(ETradeConnector):
+    """Live market data via yfinance (no API key). Orders are mock. Set DATA_SOURCE=yahoo."""
+
+    def __init__(self, data_dir: Optional[str] = None):
+        from pathlib import Path
+        from .market_data_adapter import YahooMarketDataAdapter
+        self._data_dir = Path(data_dir) if data_dir else None
+        self._market_data = YahooMarketDataAdapter(self._data_dir)
+        self._orders = MockOrderAdapter()
+        self._connected = True
+        logger.info("YahooConnector initialized (live quotes/charts/screener/heatmap)")
+
+    @property
+    def market_data(self) -> MarketDataAdapter:
+        return self._market_data
+
+    @property
+    def orders(self) -> OrderAdapter:
+        return self._orders
+
+    def connect(self) -> bool:
+        self._connected = True
+        return True
+
+    def disconnect(self) -> None:
+        self._connected = False
+
+    def is_connected(self) -> bool:
+        return self._connected
+
+
 # Placeholder for future E*TRADE implementation
 # class ETradeConnectorImpl(ETradeConnector):
 #     """Real E*TRADE API connector. Requires: consumer_key, consumer_secret, access_token, access_token_secret."""

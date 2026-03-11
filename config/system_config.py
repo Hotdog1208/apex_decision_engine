@@ -1,8 +1,10 @@
 """
 System configuration for Apex Decision Engine.
 Central configuration - no hardcoded tickers, all parameter-driven.
+DATA_SOURCE from env: mock | yahoo | etrade.
 """
 
+import os
 from dataclasses import dataclass, field
 from typing import Dict, List
 
@@ -68,5 +70,9 @@ class SystemConfig:
 
 
 def get_default_system_config() -> SystemConfig:
-    """Return default system configuration."""
-    return SystemConfig()
+    """Return default system configuration. DATA_SOURCE read from env (mock | yahoo | etrade)."""
+    cfg = SystemConfig()
+    ds = (os.environ.get("DATA_SOURCE") or "").strip().lower()
+    if ds in ("mock", "yahoo", "etrade"):
+        cfg.data_source = ds
+    return cfg

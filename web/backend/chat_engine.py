@@ -134,6 +134,41 @@ def run_tool(
         return json.dumps({"error": str(e)})
 
 
+def _demo_reply(user_message: str, get_engine: Callable, connector: Any) -> str:
+    """Smart demo responses when OpenAI is not configured."""
+    msg = (user_message or "").lower().strip()
+    # Run ADE analysis for relevant queries
+    if any(w in msg for w in ["ade", "analyze", "run analysis", "scan", "signals", "trade ideas", "recommendations"]):
+        try:
+            eng = get_engine()
+            output = eng.run()
+            trades = output.trade_outputs[:5]
+            lines = [f"**ADE Analysis** ({len(output.signals)} signals)\n"]
+            for t in trades:
+                lines.append(f"• {t.get('symbol')} {t.get('strategy')} {t.get('direction')} — Confidence {t.get('confidence_score', 0):.0f}/100")
+            lines.append("\n*Set OPENAI_API_KEY for full AI analysis.*")
+            return "\n".join(lines)
+        except Exception as e:
+            return f"ADE analysis failed: {e}. *Set OPENAI_API_KEY for full AI.*"
+    if any(w in msg for w in ["iv rank", "iv percentile", "delta", "theta", "vega", "greeks", "options"]):
+        return "**Options 101:** IV Rank = where current IV sits in 52wk range. Delta = sensitivity to $1 underlying move. Theta = time decay. Vega = sensitivity to 1% IV change.\n\n*Set OPENAI_API_KEY for detailed options analysis.*"
+    if any(w in msg for w in ["risk", "position size", "stop loss", "r:r"]):
+        return "Use the **Risk Tools** page for position sizing and R:R calculator. Rule of thumb: risk 1–2% per trade, aim for R:R ≥ 1.5.\n\n*Set OPENAI_API_KEY for personalized risk advice.*"
+    if any(w in msg for w in ["price", "quote", "aapl", "msft", "nvda", "stock", "trading"]):
+        try:
+            known = ("AAPL", "MSFT", "NVDA", "JPM", "XOM", "GOOGL", "META", "TSLA", "AMZN", "SPY")
+            sym = "AAPL"
+            for w in msg.upper().split():
+                if w in known:
+                    sym = w
+                    break
+            data = connector.market_data.fetch_quote(sym)
+            return f"**{sym}** ${data.get('price', 0):.2f} (Vol: {data.get('volume', 0):,})\n\n*Set OPENAI_API_KEY for full market commentary.*"
+        except Exception:
+            pass
+    return "I'm the ADE Trading Assistant. Ask about trades, run ADE analysis, or request market data.\n\n*Set OPENAI_API_KEY in your environment to enable full AI responses.*"
+
+
 async def chat_completion(
     messages: List[Dict[str, str]],
     get_engine: Callable,
@@ -142,7 +177,8 @@ async def chat_completion(
     """Call OpenAI API with tool use. Returns full assistant reply."""
     api_key = os.environ.get("OPENAI_API_KEY", "").strip()
     if not api_key:
-        return "[Configure OPENAI_API_KEY in Settings to enable the trading assistant.]"
+        last_msg = (messages[-1].get("content", "") or "").strip() if messages else ""
+        return _demo_reply(last_msg, get_engine, connector)
 
     try:
         from openai import AsyncOpenAI

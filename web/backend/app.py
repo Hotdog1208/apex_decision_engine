@@ -8,6 +8,10 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, List
 
+# Load .env from project root so API keys and secrets are available
+from dotenv import load_dotenv
+load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env")
+
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -17,15 +21,16 @@ import sys
 project_root = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(project_root))
 
+import os
 from config.system_config import get_default_system_config
 from engine.core.decision_engine import DecisionEngine
 from engine.core.performance_engine import PerformanceEngine
-from engine.api import MockETradeConnector
+from engine.api import MockETradeConnector, YahooConnector
 from web.backend.chat_engine import chat_completion
 from web.backend.data_services import (
     get_mock_alerts,
-    get_mock_news,
-    get_mock_calendar,
+    get_news as fetch_news,
+    get_calendar as fetch_calendar,
     get_screener_results,
     get_heatmap_data,
 )
@@ -41,7 +46,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:5173", "http://127.0.0.1:5173"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -49,7 +54,8 @@ app.add_middleware(
 
 # Engine state
 engine: DecisionEngine | None = None
-connector = MockETradeConnector(project_root / "data")
+_data_source = os.environ.get("DATA_SOURCE", "mock").strip().lower()
+connector = YahooConnector(project_root / "data") if _data_source == "yahoo" else MockETradeConnector(project_root / "data")
 active_trades: List[Dict[str, Any]] = []
 portfolio_value = 1_000_000.0
 websocket_clients: List[WebSocket] = []
@@ -72,28 +78,46 @@ async def startup():
     """Initialize on startup."""
     global engine
     engine = DecisionEngine(portfolio_value=portfolio_value, data_dir=project_root / "data")
-    logger.info("Apex Decision Engine API started")
+    logger.info("Apex Decision Engine API started (DATA_SOURCE=%s)", _data_source)
+    if _data_source == "yahoo":
+        logger.info("Live market data: Yahoo Finance (charts, screener, heatmap, quotes)")
+    if (os.environ.get("FINNHUB_API_KEY") or "").strip():
+        logger.info("News & calendar: Finnhub enabled")
+    if (os.environ.get("OPENAI_API_KEY") or "").strip():
+        logger.info("Chat: OpenAI enabled")
 
 
 # --- Routes ---
 
 @app.get("/portfolio")
 async def get_portfolio() -> Dict[str, Any]:
-    """Current portfolio state."""
-    eng = get_engine()
-    positions = eng.portfolio_manager.get_positions()
-    exposure = eng.portfolio_manager.get_asset_class_exposure()
-    sector_exp = eng.portfolio_manager.get_sector_exposure()
-    total_notional = eng.portfolio_manager.get_total_notional()
-    return {
-        "portfolio_value": portfolio_value,
-        "total_notional": total_notional,
-        "cash": eng.portfolio_manager.cash,
-        "positions_count": len(positions),
-        "asset_class_exposure": exposure,
-        "sector_exposure": sector_exp,
-        "positions": positions,
-    }
+    """Current portfolio state. Never 500."""
+    try:
+        eng = get_engine()
+        positions = eng.portfolio_manager.get_positions()
+        exposure = eng.portfolio_manager.get_asset_class_exposure()
+        sector_exp = eng.portfolio_manager.get_sector_exposure()
+        total_notional = eng.portfolio_manager.get_total_notional()
+        return {
+            "portfolio_value": portfolio_value,
+            "total_notional": total_notional,
+            "cash": eng.portfolio_manager.cash,
+            "positions_count": len(positions),
+            "asset_class_exposure": exposure or {},
+            "sector_exposure": sector_exp or {},
+            "positions": positions or [],
+        }
+    except Exception as e:
+        logger.exception("Portfolio failed: %s", e)
+        return {
+            "portfolio_value": portfolio_value,
+            "total_notional": 0,
+            "cash": portfolio_value,
+            "positions_count": 0,
+            "asset_class_exposure": {},
+            "sector_exposure": {},
+            "positions": [],
+        }
 
 
 @app.get("/trades")
@@ -166,18 +190,30 @@ async def close_trade(trade_id: str, exit_reason: str = "manual") -> Dict[str, A
 
 @app.get("/analytics")
 async def get_analytics() -> Dict[str, Any]:
-    """Performance metrics."""
-    perf = PerformanceEngine()
-    stats = perf.compute_stats(initial_value=portfolio_value)
-    return {
-        "total_pnl": stats.total_pnl,
-        "total_trades": stats.total_trades,
-        "win_rate": stats.win_rate,
-        "sharpe_ratio": stats.sharpe_ratio,
-        "max_drawdown": stats.max_drawdown,
-        "profit_factor": stats.profit_factor,
-        "expectancy": stats.expectancy,
-    }
+    """Performance metrics. Never 500."""
+    try:
+        perf = PerformanceEngine()
+        stats = perf.compute_stats(initial_value=portfolio_value)
+        return {
+            "total_pnl": stats.total_pnl,
+            "total_trades": stats.total_trades,
+            "win_rate": stats.win_rate,
+            "sharpe_ratio": stats.sharpe_ratio,
+            "max_drawdown": stats.max_drawdown,
+            "profit_factor": stats.profit_factor,
+            "expectancy": stats.expectancy,
+        }
+    except Exception as e:
+        logger.exception("Analytics failed: %s", e)
+        return {
+            "total_pnl": 0,
+            "total_trades": 0,
+            "win_rate": 0,
+            "sharpe_ratio": 0,
+            "max_drawdown": 0,
+            "profit_factor": 0,
+            "expectancy": 0,
+        }
 
 
 @app.get("/signals")
@@ -193,10 +229,15 @@ async def get_signals() -> Dict[str, Any]:
 
 @app.get("/config")
 async def get_config() -> Dict[str, Any]:
-    """System configuration (non-sensitive)."""
+    """System configuration (non-sensitive). Includes live_services so UI can show what's real vs mock."""
     cfg = get_default_system_config()
     return {
         "data_source": cfg.data_source,
+        "live_services": {
+            "market_data": cfg.data_source == "yahoo",
+            "news_calendar": bool((os.environ.get("FINNHUB_API_KEY") or "").strip()),
+            "chat_ai": bool((os.environ.get("OPENAI_API_KEY") or "").strip()),
+        },
         "scoring_weights": {
             "structure": cfg.scoring.structure_weight,
             "volatility": cfg.scoring.volatility_weight,
@@ -217,7 +258,7 @@ class ConfigUpdate(BaseModel):
 async def update_config(update: ConfigUpdate) -> Dict[str, Any]:
     """Update configuration (persists in memory)."""
     cfg = get_default_system_config()
-    if update.key == "data_source" and update.value in ("mock", "etrade"):
+    if update.key == "data_source" and update.value in ("mock", "yahoo", "etrade"):
         cfg.data_source = update.value
     return {"status": "updated", "key": update.key}
 
@@ -312,28 +353,42 @@ async def chat_history(session_id: str = "default") -> Dict[str, Any]:
 
 
 @app.get("/alerts")
-async def get_alerts() -> Dict[str, Any]:
-    """Alert center: list of recent alerts."""
-    eng = get_engine()
-    output = eng.run()
-    alerts = get_mock_alerts(output)
-    return {"alerts": alerts, "count": len(alerts)}
+async def alerts_route() -> Dict[str, Any]:
+    """Alert center. Never 500."""
+    try:
+        eng = get_engine()
+        output = eng.run()
+        alerts = get_mock_alerts(output)
+        return {"alerts": alerts or [], "count": len(alerts or [])}
+    except Exception as e:
+        logger.exception("Alerts failed: %s", e)
+        return {"alerts": [], "count": 0}
 
 
 @app.get("/news")
-async def get_news() -> Dict[str, Any]:
-    """News feed with sentiment."""
-    from web.backend.data_services import get_mock_news
-    news = get_mock_news()
-    return {"items": news, "count": len(news)}
+async def news_route() -> Dict[str, Any]:
+    """News feed with sentiment. Uses Finnhub if key set, else mock. Never 500."""
+    try:
+        news = fetch_news()
+        return {"items": news or [], "count": len(news or [])}
+    except Exception as e:
+        logger.exception("News failed: %s", e)
+        from web.backend.data_services import get_mock_news
+        fallback = get_mock_news()
+        return {"items": fallback, "count": len(fallback)}
 
 
 @app.get("/calendar")
-async def get_calendar() -> Dict[str, Any]:
-    """Economic calendar."""
-    from web.backend.data_services import get_mock_calendar
-    items = get_mock_calendar()
-    return {"items": items, "count": len(items)}
+async def calendar_route() -> Dict[str, Any]:
+    """Economic calendar. Uses Finnhub if key set, else mock. Never 500."""
+    try:
+        items = fetch_calendar()
+        return {"items": items or [], "count": len(items or [])}
+    except Exception as e:
+        logger.exception("Calendar failed: %s", e)
+        from web.backend.data_services import get_mock_calendar
+        fallback = get_mock_calendar()
+        return {"items": fallback, "count": len(fallback)}
 
 
 @app.get("/screener")
@@ -342,25 +397,84 @@ async def screener(
     max_price: float = 10000,
     min_volume: int = 0,
     sectors: str = "",
+    min_rsi: float = 0,
+    max_rsi: float = 100,
 ) -> Dict[str, Any]:
-    """Stock screener. sectors comma-separated."""
-    snapshot = connector.market_data.fetch_market_snapshot()
-    filters = {
-        "min_price": min_price,
-        "max_price": max_price,
-        "min_volume": min_volume,
-        "sectors": [s.strip() for s in sectors.split(",") if s.strip()],
-    }
-    results = get_screener_results(filters, snapshot)
-    return {"results": results, "count": len(results)}
+    """Stock screener. sectors comma-separated. RSI approximated when no real RSI. Never 500."""
+    try:
+        snapshot = connector.market_data.fetch_market_snapshot()
+        filters = {
+            "min_price": min_price,
+            "max_price": max_price,
+            "min_volume": min_volume,
+            "sectors": [s.strip() for s in sectors.split(",") if s.strip()],
+            "min_rsi": min_rsi,
+            "max_rsi": max_rsi,
+        }
+        results = get_screener_results(filters, snapshot)
+        return {"results": results or [], "count": len(results or [])}
+    except Exception as e:
+        logger.exception("Screener failed: %s", e)
+        return {"results": [], "count": 0}
+
+
+@app.get("/market-snapshot")
+async def market_snapshot() -> Dict[str, Any]:
+    """Full market snapshot for charts, screener, etc. Never 500."""
+    try:
+        return connector.market_data.fetch_market_snapshot()
+    except Exception as e:
+        logger.exception("Market snapshot failed: %s", e)
+        return {"stocks": [], "price_history": {}, "timestamp": ""}
+
+
+@app.get("/quote")
+async def quote_route(symbol: str) -> Dict[str, Any]:
+    """Single symbol quote. Never 500."""
+    try:
+        return connector.market_data.fetch_quote((symbol or "").upper() or "AAPL")
+    except Exception as e:
+        logger.exception("Quote failed: %s", e)
+        return {"symbol": (symbol or "").upper(), "price": 0, "bid": 0, "ask": 0, "volume": 0, "timestamp": ""}
+
+
+@app.get("/quotes")
+async def quotes_route(symbols: str) -> Dict[str, Any]:
+    """Batch quotes. Never 500."""
+    try:
+        sym_list = [s.strip().upper() for s in (symbols or "").split(",") if s.strip()][:50]
+        result = []
+        for sym in sym_list:
+            try:
+                result.append(connector.market_data.fetch_quote(sym))
+            except Exception:
+                result.append({"symbol": sym, "price": 0, "bid": 0, "ask": 0, "volume": 0, "timestamp": ""})
+        return {"quotes": result}
+    except Exception as e:
+        logger.exception("Quotes failed: %s", e)
+        return {"quotes": []}
+
+
+@app.get("/chart/{symbol}")
+async def chart_route(symbol: str, period: str = "3mo", interval: str = "1d") -> Dict[str, Any]:
+    """OHLCV for charting. Never 500."""
+    try:
+        return connector.market_data.fetch_ohlc((symbol or "AAPL").upper(), period=period or "3mo", interval=interval or "1d")
+    except Exception as e:
+        logger.exception("Chart failed: %s", e)
+        return {"symbol": (symbol or "AAPL").upper(), "period": period, "interval": interval, "series": []}
 
 
 @app.get("/heatmap")
 async def heatmap() -> Dict[str, Any]:
-    """Heatmap data (symbol/sector performance)."""
-    snapshot = connector.market_data.fetch_market_snapshot()
-    data = get_heatmap_data(snapshot)
-    return {"data": data}
+    """Heatmap data. Never 500."""
+    try:
+        snapshot = connector.market_data.fetch_market_snapshot()
+        data = get_heatmap_data(snapshot)
+        return {"data": data or []}
+    except Exception as e:
+        logger.exception("Heatmap failed: %s", e)
+        return {"data": []}
 
 
 @app.get("/watchlists")
@@ -390,17 +504,20 @@ async def remove_from_watchlist(name: str, symbol: str) -> Dict[str, Any]:
 class PriceAlertCreate(BaseModel):
     symbol: str
     condition: str  # above, below
-    price: float
+    price: float = 0
+    target_price: float = 0  # frontend sends this
 
 
 @app.post("/price-alerts")
 async def create_price_alert(body: PriceAlertCreate) -> Dict[str, Any]:
     """Create price alert."""
+    target = body.target_price or body.price or 0
     price_alerts.append({
         "id": f"pa-{len(price_alerts)}",
         "symbol": body.symbol,
         "condition": body.condition,
-        "price": body.price,
+        "target_price": target,
+        "price": target,
         "created": __import__("datetime").datetime.utcnow().isoformat() + "Z",
     })
     return {"alerts": price_alerts}
@@ -410,6 +527,15 @@ async def create_price_alert(body: PriceAlertCreate) -> Dict[str, Any]:
 async def list_price_alerts() -> Dict[str, Any]:
     """List price alerts."""
     return {"alerts": price_alerts}
+
+
+@app.delete("/price-alerts/{alert_id}")
+async def delete_price_alert(alert_id: str) -> Dict[str, Any]:
+    """Remove a price alert by id."""
+    global price_alerts
+    before = len(price_alerts)
+    price_alerts = [a for a in price_alerts if a.get("id") != alert_id]
+    return {"alerts": price_alerts, "removed": before - len(price_alerts)}
 
 
 @app.get("/export/trades")

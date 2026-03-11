@@ -1,42 +1,69 @@
 import { useState, useEffect } from 'react'
+import { motion } from 'framer-motion'
+import { BarChart2 } from 'lucide-react'
 import { api } from '../api'
+import PageWrapper from '../components/PageWrapper'
+import PageHeader from '../components/PageHeader'
+import StatCard from '../components/StatCard'
+import Card, { CardHeader, CardBody } from '../components/Card'
 import PerformanceCharts from '../components/PerformanceCharts'
+import SkeletonLoader from '../components/SkeletonLoader'
+import { formatCurrency } from '../lib/format'
 
 export default function Analytics() {
   const [analytics, setAnalytics] = useState(null)
+  const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     api.getAnalytics()
       .then(setAnalytics)
       .catch(console.error)
+      .finally(() => setLoading(false))
   }, [])
 
+  if (loading) {
+    return (
+      <PageWrapper>
+        <PageHeader title="Performance Analytics" subtitle="Risk-adjusted metrics and cumulative returns." />
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          {[1, 2, 3, 4].map((i) => (
+            <SkeletonLoader key={i} height={100} className="rounded-xl" />
+          ))}
+        </div>
+        <SkeletonLoader height={240} className="rounded-xl mt-6" />
+      </PageWrapper>
+    )
+  }
+
+  const pnl = analytics?.total_pnl ?? 0
   return (
-    <div className="space-y-6">
-      <h1 className="text-2xl font-bold text-white">Performance Analytics</h1>
-
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <div className="bg-apex-dark rounded-lg border border-slate-700/50 p-4">
-          <div className="text-slate-400 text-sm">Total PnL</div>
-          <div className={`text-2xl font-bold ${(analytics?.total_pnl ?? 0) >= 0 ? 'text-apex-profit' : 'text-apex-loss'}`}>
-            ${(analytics?.total_pnl ?? 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}
-          </div>
-        </div>
-        <div className="bg-apex-dark rounded-lg border border-slate-700/50 p-4">
-          <div className="text-slate-400 text-sm">Win Rate</div>
-          <div className="text-2xl font-bold text-white">{(analytics?.win_rate ?? 0).toFixed(1)}%</div>
-        </div>
-        <div className="bg-apex-dark rounded-lg border border-slate-700/50 p-4">
-          <div className="text-slate-400 text-sm">Sharpe Ratio</div>
-          <div className="text-2xl font-bold text-white">{(analytics?.sharpe_ratio ?? 0).toFixed(2)}</div>
-        </div>
-        <div className="bg-apex-dark rounded-lg border border-slate-700/50 p-4">
-          <div className="text-slate-400 text-sm">Profit Factor</div>
-          <div className="text-2xl font-bold text-white">{(analytics?.profit_factor ?? 0).toFixed(2)}</div>
-        </div>
+    <PageWrapper>
+      <PageHeader
+        title="Performance Analytics"
+        subtitle="Risk-adjusted metrics and cumulative returns. Track PnL, Sharpe, drawdown, and win rate."
+        icon={BarChart2}
+      />
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+        <StatCard
+          label="Total PnL"
+          value={pnl}
+          prefix={pnl >= 0 ? '+$' : '-$'}
+          format="currency"
+          decimals={2}
+          variant={pnl >= 0 ? 'profit' : 'loss'}
+          animate
+          delay={0}
+        />
+        <StatCard label="Win Rate" value={analytics?.win_rate ?? 0} format="percent" suffix="%" decimals={1} animate delay={0.05} />
+        <StatCard label="Sharpe Ratio" value={analytics?.sharpe_ratio ?? 0} format="number" decimals={2} animate delay={0.1} />
+        <StatCard label="Profit Factor" value={analytics?.profit_factor ?? 0} format="number" decimals={2} animate delay={0.15} />
       </div>
-
-      <PerformanceCharts analytics={analytics} />
-    </div>
+      <Card animate delay={0.2} hover>
+        <CardHeader title="Cumulative Return & Risk" subtitle="Simulated performance over time" />
+        <CardBody>
+          <PerformanceCharts analytics={analytics} />
+        </CardBody>
+      </Card>
+    </PageWrapper>
   )
 }

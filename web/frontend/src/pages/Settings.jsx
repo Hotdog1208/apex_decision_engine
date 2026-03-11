@@ -1,5 +1,8 @@
 import { useState, useEffect } from 'react'
+import { Settings as SettingsIcon } from 'lucide-react'
 import { api } from '../api'
+import PageWrapper from '../components/PageWrapper'
+import PageHeader from '../components/PageHeader'
 
 const PREF_EMAIL_ALERTS = 'ade_pref_email_alerts'
 const PREF_PUSH_ALERTS = 'ade_pref_push_alerts'
@@ -20,13 +23,21 @@ export default function Settings() {
     localStorage.setItem(PREF_PUSH_ALERTS, String(pushAlerts))
   }, [pushAlerts])
 
-  if (!config) return <div className="text-slate-400">Loading...</div>
+  if (!config) {
+    return (
+      <PageWrapper>
+        <PageHeader title="Settings" icon={SettingsIcon} />
+        <div className="text-white/50">Loading...</div>
+      </PageWrapper>
+    )
+  }
 
   return (
-    <div className="space-y-6 max-w-2xl">
-      <h1 className="text-2xl font-bold text-white">Settings</h1>
+    <PageWrapper>
+      <div className="space-y-6 max-w-2xl">
+        <PageHeader title="Settings" subtitle="Alert preferences and system config." icon={SettingsIcon} />
 
-      <div className="bg-apex-dark rounded-lg border border-slate-700/50 p-4">
+      <div className="rounded-xl border border-white/10 bg-white/5 p-6">
         <h2 className="text-lg font-semibold text-white mb-4">Alert preferences</h2>
         <div className="space-y-2">
           <label className="flex items-center gap-2 cursor-pointer">
@@ -54,7 +65,7 @@ export default function Settings() {
           Current: <span className="text-white font-mono">{config.data_source}</span>
         </p>
         <p className="text-slate-500 text-xs">
-          Set to "mock" for local JSON data. Set to "etrade" when E*TRADE API keys are configured.
+          Set to "yahoo" in .env for live quotes/charts/screener (no key). "mock" = JSON only. "etrade" = when E*TRADE is configured. Add FINNHUB_API_KEY for real News and Calendar.
         </p>
       </div>
 
@@ -88,5 +99,6 @@ export default function Settings() {
         </p>
       </div>
     </div>
+    </PageWrapper>
   )
 }

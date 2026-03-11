@@ -6,8 +6,18 @@ import { Search, BarChart3, MessageCircle, Bell, TrendingUp, Settings } from 'lu
 const ROUTES = [
   { path: '/dashboard', label: 'Dashboard', icon: BarChart3 },
   { path: '/trading', label: 'Live Trading', icon: TrendingUp },
+  { path: '/charts', label: 'Charts', icon: BarChart3 },
+  { path: '/screener', label: 'Screener', icon: BarChart3 },
+  { path: '/heatmap', label: 'Heatmap', icon: BarChart3 },
+  { path: '/news', label: 'News', icon: BarChart3 },
+  { path: '/calendar', label: 'Calendar', icon: BarChart3 },
+  { path: '/watchlists', label: 'Watchlists', icon: BarChart3 },
   { path: '/alerts', label: 'Alerts', icon: Bell },
+  { path: '/price-alerts', label: 'Price Alerts', icon: Bell },
+  { path: '/risk-tools', label: 'Risk Tools', icon: BarChart3 },
   { path: '/chat', label: 'Chat', icon: MessageCircle },
+  { path: '/strategies', label: 'Strategies', icon: BarChart3 },
+  { path: '/analytics', label: 'Analytics', icon: TrendingUp },
   { path: '/settings', label: 'Settings', icon: Settings },
 ]
 

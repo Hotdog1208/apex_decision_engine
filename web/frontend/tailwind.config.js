@@ -40,6 +40,17 @@ export default {
           '0%': { opacity: '0', transform: 'translateY(20px)' },
           '100%': { opacity: '1', transform: 'translateY(0)' },
         },
+        pulseSubtle: {
+          '0%, 100%': { opacity: '1' },
+          '50%': { opacity: '0.85' },
+        },
+        gradientShift: {
+          '0%': { backgroundPosition: '0% 50%' },
+          '100%': { backgroundPosition: '100% 50%' },
+        },
+      },
+      backgroundSize: {
+        '200%': '200%',
       },
       transitionTimingFunction: {
         'snap': 'cubic-bezier(0.16, 1, 0.3, 1)',
