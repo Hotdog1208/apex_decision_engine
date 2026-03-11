@@ -273,3 +273,19 @@ class SignalEngine:
             signals.append(sig)
 
         return signals
+
+    def process_uoa_anomaly(self, anomaly: Dict[str, Any]) -> tuple[float, Dict[str, Any]]:
+        """Process an unusual options activity anomaly through the XGBoost ML pipeline."""
+        from engine.ml_models.uoa_xgboost import UOAModelPipeline
+        from config.system_config import get_default_system_config
+        pipeline = UOAModelPipeline(data_source=get_default_system_config().data_source)
+        ticker = anomaly.get("ticker")
+        
+        # History is fetched by the model pipeline to engineer features
+        history_data = pipeline.market_adapter.fetch_ohlc(ticker, period="3mo", interval="1d")
+        history = history_data.get("series", [])
+        
+        prob = pipeline.predict(anomaly, history)
+        features = pipeline.engineer_features(anomaly, history) or {}
+        
+        return prob, features

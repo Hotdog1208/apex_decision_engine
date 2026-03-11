@@ -550,6 +550,36 @@ async def export_trades() -> Any:
     )
 
 
+@app.post("/internal/uoa_alert")
+async def process_uoa_alert(anomaly: Dict[str, Any]) -> Dict[str, Any]:
+    """Process a new UOA anomaly and broadcast if high conviction."""
+    try:
+        eng = get_engine()
+        prob, features = eng.signal_engine.process_uoa_anomaly(anomaly)
+        
+        if prob > 0.8:
+            payload = {
+                "event": "high_conviction_uoa",
+                "data": {
+                    "anomaly": anomaly,
+                    "probability": round(prob, 4),
+                    "features": features
+                }
+            }
+            global websocket_clients
+            for ws in websocket_clients:
+                try:
+                    await ws.send_json(payload)
+                except Exception:
+                    pass
+            return {"status": "alert_sent", "probability": prob}
+        return {"status": "processed", "probability": prob}
+    except Exception as e:
+        logger.exception("Failed to process UOA anomaly: %s", e)
+        from fastapi import HTTPException
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/health")
 async def health():
     """Health check."""

@@ -49,6 +49,13 @@ class UOAScanner:
 
         if all_anomalies:
             self.save_anomalies(all_anomalies)
+            import requests
+            for anomaly in all_anomalies:
+                try:
+                    res = requests.post("http://localhost:8000/internal/uoa_alert", json=anomaly, timeout=2)
+                    logger.info(f"Inference pipeline response for {anomaly.get('ticker')}: {res.json()}")
+                except Exception as e:
+                    logger.error(f"Failed to post to inference pipeline: {e}")
         else:
             logger.info("No unusual options activity fulfilling the Vol/OI criteria was detected today.")
 
