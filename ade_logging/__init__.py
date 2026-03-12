@@ -1,4 +1,4 @@
 """Logging modules for ADE (avoid shadowing stdlib logging)."""
 
-from .trade_logger import TradeLogger
-from .performance_logger import PerformanceLogger
+from ade_logging.trade_logger import TradeLogger  # type: ignore
+from ade_logging.performance_logger import PerformanceLogger  # type: ignore

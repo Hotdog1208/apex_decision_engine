@@ -1,8 +1,8 @@
 import asyncio
 import json
 import logging
-import requests
-import websockets
+import requests  # type: ignore
+import websockets  # type: ignore
 
 logging.basicConfig(level=logging.INFO)
 

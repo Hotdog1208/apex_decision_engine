@@ -117,22 +117,22 @@ class BaseAsset(ABC):
     @abstractmethod
     def asset_class(self) -> AssetClass:
         """Asset class identifier."""
-        pass
+        ...
 
     @abstractmethod
     def from_snapshot(self, snapshot: AssetSnapshot) -> "BaseAsset":
         """Create asset from market snapshot."""
-        pass
+        ...
 
     @abstractmethod
     def validate_for_trade(self, direction: Direction, quantity: float) -> tuple[bool, str]:
         """Validate trade parameters. Returns (valid, reason)."""
-        pass
+        ...
 
     @abstractmethod
     def compute_notional(self, quantity: float, price: float) -> float:
         """Compute notional value of position."""
-        pass
+        ...
 
     @abstractmethod
     def build_position_details(
@@ -142,4 +142,4 @@ class BaseAsset(ABC):
         direction: Direction,
     ) -> PositionDetails:
         """Build structured position details."""
-        pass
+        ...

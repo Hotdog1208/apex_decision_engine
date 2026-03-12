@@ -7,8 +7,8 @@ import json
 import os
 import logging
 from typing import Any, Callable, Dict, List
-import google.generativeai as genai
-from engine.ml_models.uoa_xgboost import UOAModelPipeline
+import google.generativeai as genai  # type: ignore
+from engine.ml_models.uoa_xgboost import UOAModelPipeline  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -60,11 +60,11 @@ def build_rag_context(user_message: str, connector: Any) -> str:
     if uoa_file.exists():
         try:
             with open(uoa_file, "r") as f:
-                data = json.load(f)
+                data: List[Dict[str, Any]] = json.load(f)  # type: ignore
                 if ticker:
                     anomalies = [a for a in data if a.get("ticker") == ticker]
                 if not anomalies:
-                    anomalies = data[-5:]  # Get the last 5 if no ticker match
+                    anomalies = list(data)[-5:]  # Get the last 5 if no ticker match  # type: ignore
         except Exception as e:
             logger.error(f"Failed to load UOA data: {e}")
             
@@ -72,7 +72,7 @@ def build_rag_context(user_message: str, connector: Any) -> str:
         context_blocks.append("No recent UOA anomalies found in the local database.")
     else:
         context_blocks.append("Recent UOA Anomalies:")
-        for a in anomalies[-3:]:
+        for a in anomalies[-3:]:  # type: ignore
             context_blocks.append(json.dumps(a))
             
     # 2. ML Probability Score
@@ -126,9 +126,9 @@ async def chat_completion(
         return _demo_reply(last_msg, get_engine, connector)
 
     try:
-        genai.configure(api_key=api_key)
+        genai.configure(api_key=api_key)  # type: ignore
         model_name = os.environ.get("GEMINI_CHAT_MODEL", "gemini-1.5-pro")
-        model = genai.GenerativeModel(model_name)
+        model = genai.GenerativeModel(model_name)  # type: ignore
     except Exception as e:
         return f"[Error configuring Gemini API: {e}]"
 

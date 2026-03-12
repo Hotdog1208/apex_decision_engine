@@ -20,22 +20,22 @@ class MarketDataAdapter(ABC):
     @abstractmethod
     def fetch_quote(self, symbol: str) -> Dict[str, Any]:
         """Fetch quote for symbol. Returns: {symbol, price, bid, ask, volume, timestamp}."""
-        pass
+        raise NotImplementedError
 
     @abstractmethod
     def fetch_option_chain(self, symbol: str, expiration: Optional[str] = None) -> Dict[str, Any]:
         """Fetch option chain. Returns standardized chain with calls, puts, underlying_price."""
-        pass
+        raise NotImplementedError
 
     @abstractmethod
     def fetch_futures_chain(self, root_symbol: Optional[str] = None) -> Dict[str, Any]:
         """Fetch futures contracts. Returns standardized chain with contracts, price_history."""
-        pass
+        raise NotImplementedError
 
     @abstractmethod
     def fetch_market_snapshot(self) -> Dict[str, Any]:
         """Fetch full market snapshot: stocks, price_history."""
-        pass
+        raise NotImplementedError
 
     def fetch_ohlc(
         self,
@@ -144,10 +144,10 @@ class MockMarketDataAdapter(MarketDataAdapter):
             vol = int(stock.get("volume", 0) / max(len(hist), 1)) if i == len(hist) - 1 else (1000000 + i * 5000)
             series.append({
                 "time": int(t.timestamp()),
-                "open": round(open_, 2),
-                "high": round(high, 2),
-                "low": round(low, 2),
-                "close": round(close, 2),
+                "open": round(float(open_), 2),  # type: ignore
+                "high": round(float(high), 2),  # type: ignore
+                "low": round(float(low), 2),  # type: ignore
+                "close": round(float(close), 2),  # type: ignore
                 "volume": vol,
             })
         return {"symbol": symbol, "period": period, "interval": interval, "series": series}
@@ -167,11 +167,11 @@ class YahooMarketDataAdapter(MarketDataAdapter):
         self.data_dir = Path(data_dir) if data_dir else Path(__file__).resolve().parent.parent.parent / "data"
         self.symbols = list(symbols) if symbols else YAHOO_DEFAULT_SYMBOLS.copy()
         self._mock = MockMarketDataAdapter(self.data_dir)
-        logger.info("YahooMarketDataAdapter initialized with symbols=%s", self.symbols[:5])
+        logger.info("YahooMarketDataAdapter initialized with symbols=%s", list(self.symbols)[0:5])  # type: ignore
 
     def fetch_quote(self, symbol: str) -> Dict[str, Any]:
         try:
-            import yfinance as yf
+            import yfinance as yf  # type: ignore
             t = yf.Ticker(symbol)
             info = t.fast_info
             price = getattr(info, "last_price", None) or getattr(info, "previous_close", 0)
@@ -198,16 +198,16 @@ class YahooMarketDataAdapter(MarketDataAdapter):
 
     def fetch_market_snapshot(self) -> Dict[str, Any]:
         try:
-            import pandas as pd
-            import numpy as np
-            import yfinance as yf
+            import pandas as pd  # type: ignore
+            import numpy as np  # type: ignore
+            import yfinance as yf  # type: ignore
             from datetime import datetime, timezone
 
             syms = [s for s in self.symbols if s]
             if not syms:
                 return {"stocks": [], "price_history": {}, "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")}
 
-            hist = yf.download(syms, period="3mo", interval="1d", group_by="ticker", auto_adjust=True, progress=False, threads=True)
+            hist: Any = yf.download(syms, period="3mo", interval="1d", group_by="ticker", auto_adjust=True, progress=False, threads=True)
             if hist.empty:
                 return {"stocks": [], "price_history": {}, "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")}
 
@@ -278,15 +278,15 @@ class YahooMarketDataAdapter(MarketDataAdapter):
                         "ask": price,
                         "volume": volume,
                         "sector": sector,
-                        "returns_20d": round(ret_20, 4),
-                        "returns_10d": round(ret_10, 4),
-                        "volatility_20d": round(vol_20, 4) if vol_20 else 0.2,
-                        "volatility_10d": round(vol_10, 4) if vol_10 else 0.15,
+                        "returns_20d": round(float(ret_20), 4),  # type: ignore
+                        "returns_10d": round(float(ret_10), 4),  # type: ignore
+                        "volatility_20d": round(float(vol_20), 4) if vol_20 else 0.2,  # type: ignore
+                        "volatility_10d": round(float(vol_10), 4) if vol_10 else 0.15,  # type: ignore
                         "high_20d": high_20,
                         "low_20d": low_20,
                         "close_prev": prev,
                     })
-                    price_history[symbol] = [round(float(x), 2) for x in closes]
+                    price_history[symbol] = [round(float(x), 2) for x in closes]  # type: ignore
                 except Exception as e:
                     logger.warning("Yahoo snapshot row %s: %s", symbol, e)
 
@@ -307,23 +307,23 @@ class YahooMarketDataAdapter(MarketDataAdapter):
     ) -> Dict[str, Any]:
         """Fetch OHLCV from yfinance for charting."""
         try:
-            import yfinance as yf
+            import yfinance as yf  # type: ignore
             from datetime import timezone
 
             ticker = yf.Ticker(symbol)
             # yfinance: period 1d,5d,1mo,3mo,6mo,1y ; interval 1m,2m,5m,15m,30m,60m,90m,1d,5d,1wk,1mo,3mo
-            df = ticker.history(period=period, interval=interval, auto_adjust=True)
+            df: Any = ticker.history(period=period, interval=interval, auto_adjust=True)
             if df is None or df.empty:
                 return {"symbol": symbol, "period": period, "interval": interval, "series": []}
             series = []
             for dt, row in df.iterrows():
-                ts = int(dt.timestamp()) if hasattr(dt, "timestamp") else 0
+                ts = int(dt.timestamp()) if hasattr(dt, "timestamp") else 0  # type: ignore
                 series.append({
                     "time": ts,
-                    "open": round(float(row.get("Open", 0)), 2),
-                    "high": round(float(row.get("High", 0)), 2),
-                    "low": round(float(row.get("Low", 0)), 2),
-                    "close": round(float(row.get("Close", 0)), 2),
+                    "open": round(float(row.get("Open", 0)), 2),  # type: ignore
+                    "high": round(float(row.get("High", 0)), 2),  # type: ignore
+                    "low": round(float(row.get("Low", 0)), 2),  # type: ignore
+                    "close": round(float(row.get("Close", 0)), 2),  # type: ignore
                     "volume": int(row.get("Volume", 0)),
                 })
             return {"symbol": symbol, "period": period, "interval": interval, "series": series}

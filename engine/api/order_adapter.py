@@ -69,27 +69,27 @@ class OrderAdapter(ABC):
     @abstractmethod
     def place_stock_order(self, order: StockOrder) -> OrderResponse:
         """Place stock order."""
-        pass
+        ...
 
     @abstractmethod
     def place_option_order(self, order: OptionOrder) -> OrderResponse:
         """Place option order."""
-        pass
+        ...
 
     @abstractmethod
     def place_futures_order(self, order: FutureOrder) -> OrderResponse:
         """Place futures order."""
-        pass
+        ...
 
     @abstractmethod
     def cancel_order(self, order_id: str) -> bool:
         """Cancel order by ID."""
-        pass
+        ...
 
     @abstractmethod
     def get_positions(self) -> List[Position]:
         """Get current positions."""
-        pass
+        ...
 
 
 class MockOrderAdapter(OrderAdapter):

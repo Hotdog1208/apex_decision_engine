@@ -6,9 +6,9 @@ Ranks trades by confidence, respects risk budget, allocates proportionally.
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from config.system_config import AllocationConfig, get_default_system_config
-from engine.core.risk_engine import RiskEngine
-from engine.core.scoring_engine import ScoredTrade
+from config.system_config import AllocationConfig, get_default_system_config  # type: ignore
+from engine.core.risk_engine import RiskEngine  # type: ignore
+from engine.core.scoring_engine import ScoredTrade  # type: ignore
 
 
 def _clamp(value: float, lo: float, hi: float) -> float:
@@ -59,7 +59,7 @@ class CapitalAllocator:
         eligible = sorted(eligible, key=lambda x: x.confidence_score, reverse=True)
 
         # Limit number of trades
-        eligible = eligible[: cfg.max_trades_per_cycle]
+        eligible = eligible[: cfg.max_trades_per_cycle]  # type: ignore
 
         allocated = []
         used_capital = sum(abs(p.get("notional", 0)) for p in existing)
@@ -78,8 +78,8 @@ class CapitalAllocator:
         max_pos_notional = portfolio_value * 0.05  # 5% max per position (spec)
         for st in eligible:
             weight = st.confidence_score / total_conf
-            weight *= cfg.proportional_weight_base
-            raw_alloc = available * weight * (st.confidence_score / 100.0)
+            weight *= cfg.proportional_weight_base  # type: ignore
+            raw_alloc = available * weight * (st.confidence_score / 100.0)  # type: ignore
             raw_alloc = _clamp(raw_alloc, 0, min(available * cfg.proportional_weight_base, max_pos_notional))
 
             pos = st.candidate.position_details
@@ -97,7 +97,7 @@ class CapitalAllocator:
 
             notional = raw_alloc
             qty = notional / (entry * mult) if mult > 0 else notional / entry
-            qty = int(qty) if st.candidate.asset_class != "future" else round(qty, 2)
+            qty = int(qty) if st.candidate.asset_class != "future" else round(qty, 2)  # type: ignore
 
             if qty <= 0:
                 allocated.append(AllocatedTrade(st, 0.0, 0.0, 0.0, True, "Quantity rounded to zero"))
@@ -123,7 +123,7 @@ class CapitalAllocator:
                 quantity=qty,
                 rejected=False,
             ))
-            available -= actual_notional
+            available -= actual_notional  # type: ignore
             if available <= 0:
                 break
 

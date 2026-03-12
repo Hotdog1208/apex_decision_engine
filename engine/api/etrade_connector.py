@@ -9,8 +9,8 @@ from typing import Any, Dict, List, Optional
 
 import logging
 
-from .market_data_adapter import MarketDataAdapter, MockMarketDataAdapter
-from .order_adapter import OrderAdapter, MockOrderAdapter
+from .market_data_adapter import MarketDataAdapter, MockMarketDataAdapter  # type: ignore
+from .order_adapter import OrderAdapter, MockOrderAdapter  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -22,28 +22,28 @@ class ETradeConnector(ABC):
     @abstractmethod
     def market_data(self) -> MarketDataAdapter:
         """Market data adapter."""
-        pass
+        ...
 
     @property
     @abstractmethod
     def orders(self) -> OrderAdapter:
         """Order adapter."""
-        pass
+        ...
 
     @abstractmethod
     def connect(self) -> bool:
         """Establish connection. OAuth flow for real API."""
-        pass
+        ...
 
     @abstractmethod
     def disconnect(self) -> None:
         """Close connection."""
-        pass
+        ...
 
     @abstractmethod
     def is_connected(self) -> bool:
         """Check if connected."""
-        pass
+        ...
 
 
 class MockETradeConnector(ETradeConnector):
@@ -81,7 +81,7 @@ class YahooConnector(ETradeConnector):
 
     def __init__(self, data_dir: Optional[str] = None):
         from pathlib import Path
-        from .market_data_adapter import YahooMarketDataAdapter
+        from .market_data_adapter import YahooMarketDataAdapter  # type: ignore
         self._data_dir = Path(data_dir) if data_dir else None
         self._market_data = YahooMarketDataAdapter(self._data_dir)
         self._orders = MockOrderAdapter()

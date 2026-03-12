@@ -123,31 +123,31 @@ class LifecycleManager:
         Check if trade should exit. Returns ExitReason if exit, else None.
         """
         state = self.trades.get(trade_id)
-        if not state or state.exit_price is not None:
+        if state is None or state.exit_price is not None:
             return None
 
-        if state.direction == "long":
-            if current_price <= state.stop_price:
+        if state.direction == "long":  # type: ignore
+            if state.stop_price is not None and current_price <= state.stop_price:  # type: ignore
                 return ExitReason.STOP
-            if state.target_price and current_price >= state.target_price:
+            if state.target_price and current_price >= state.target_price:  # type: ignore
                 return ExitReason.TARGET
-            if state.trailing_stop_activated and state.trailing_stop_price and current_price <= state.trailing_stop_price:
+            if state.trailing_stop_activated and state.trailing_stop_price and current_price <= state.trailing_stop_price:  # type: ignore
                 return ExitReason.TRAILING_STOP
-            high_water = state.entry_price * (1 + self.trailing_activation_pct)
+            high_water = state.entry_price * (1 + self.trailing_activation_pct)  # type: ignore
             if current_price >= high_water:
-                state.trailing_stop_activated = True
-                state.trailing_stop_price = current_price * (1 - self.trailing_stop_pct)
+                state.trailing_stop_activated = True  # type: ignore
+                state.trailing_stop_price = current_price * (1 - self.trailing_stop_pct)  # type: ignore
         else:
-            if current_price >= state.stop_price:
+            if state.stop_price is not None and current_price >= state.stop_price:  # type: ignore
                 return ExitReason.STOP
-            if state.target_price and current_price <= state.target_price:
+            if state.target_price and current_price <= state.target_price:  # type: ignore
                 return ExitReason.TARGET
-            if state.trailing_stop_activated and state.trailing_stop_price and current_price >= state.trailing_stop_price:
+            if state.trailing_stop_activated and state.trailing_stop_price and current_price >= state.trailing_stop_price:  # type: ignore
                 return ExitReason.TRAILING_STOP
-            low_water = state.entry_price * (1 - self.trailing_activation_pct)
+            low_water = state.entry_price * (1 - self.trailing_activation_pct)  # type: ignore
             if current_price <= low_water:
-                state.trailing_stop_activated = True
-                state.trailing_stop_price = current_price * (1 + self.trailing_stop_pct)
+                state.trailing_stop_activated = True  # type: ignore
+                state.trailing_stop_price = current_price * (1 + self.trailing_stop_pct)  # type: ignore
 
         return None
 
@@ -161,7 +161,7 @@ class LifecycleManager:
     ) -> None:
         """Record trade exit."""
         state = self.trades.get(trade_id)
-        if not state:
+        if state is None:
             return
         state.exit_price = exit_price
         state.exit_time = exit_time

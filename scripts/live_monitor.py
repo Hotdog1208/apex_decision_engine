@@ -8,7 +8,7 @@ from pathlib import Path
 project_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(project_root))
 
-from engine.core.decision_engine import DecisionEngine
+from engine.core.decision_engine import DecisionEngine  # type: ignore
 
 
 def main() -> int:
@@ -24,7 +24,7 @@ def main() -> int:
             print(f"[{time.strftime('%H:%M:%S')}] Signals: {len(output.signals)} | "
                   f"Candidates: {len(output.trade_candidates)} | "
                   f"Allocated: {len(allocated)}")
-            for a in allocated[:3]:
+            for a in allocated[:3]:  # type: ignore
                 t = a.scored_trade.candidate
                 print(f"  - {t.symbol} ({t.strategy}) conf={a.scored_trade.confidence_score:.1f}")
             print()

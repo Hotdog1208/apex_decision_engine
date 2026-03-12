@@ -31,10 +31,10 @@ class PnlEngine:
         unrealized = 0.0
         if market_prices:
             for p in open_positions:
-                symbol = p.get("symbol")
-                entry = p.get("entry_price", 0)
-                qty = p.get("quantity", 0)
-                mult = p.get("multiplier", 1.0)
+                symbol = str(p.get("symbol", ""))
+                entry = float(p.get("entry_price", 0.0))
+                qty = float(p.get("quantity", 0.0))
+                mult = float(p.get("multiplier", 1.0))
                 current = market_prices.get(symbol, entry)
                 if p.get("direction") == "long":
                     unrealized += (current - entry) * abs(qty) * mult
@@ -43,13 +43,13 @@ class PnlEngine:
 
         by_strategy: Dict[str, float] = {}
         for t in closed_trades:
-            s = t.get("strategy", "unknown")
-            by_strategy[s] = by_strategy.get(s, 0) + t.get("pnl", 0)
+            s = str(t.get("strategy", "unknown"))
+            by_strategy[s] = by_strategy.get(s, 0.0) + float(t.get("pnl", 0.0))
 
         by_asset: Dict[str, float] = {}
         for t in closed_trades:
-            ac = t.get("asset_class", "unknown")
-            by_asset[ac] = by_asset.get(ac, 0) + t.get("pnl", 0)
+            ac = str(t.get("asset_class", "unknown"))
+            by_asset[ac] = by_asset.get(ac, 0.0) + float(t.get("pnl", 0.0))
 
         return PnLResult(
             realized_pnl=realized,

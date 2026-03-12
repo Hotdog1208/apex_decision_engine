@@ -8,9 +8,10 @@ import json
 import logging
 import asyncio
 import webbrowser
+from typing import Optional
 from pathlib import Path
-from rauth import OAuth1Service
-from dotenv import load_dotenv
+from rauth import OAuth1Service  # type: ignore
+from dotenv import load_dotenv  # type: ignore
 
 load_dotenv()
 
@@ -53,13 +54,13 @@ class ETradeRealConnector:
             try:
                 with open(self.token_file, "r") as f:
                     tokens = json.load(f)
-                access_token = tokens.get("access_token")
-                access_token_secret = tokens.get("access_token_secret")
+                access_token = tokens.get("access_token")  # type: ignore
+                access_token_secret = tokens.get("access_token_secret")  # type: ignore
 
                 if access_token and access_token_secret:
                     self.session = self.oauth.get_session((access_token, access_token_secret))
                     # Validate session
-                    resp = self.session.get(f"{self.base_url}/v1/market/quote/SPY.json")
+                    resp = self.session.get(f"{self.base_url}/v1/market/quote/SPY.json")  # type: ignore
                     if resp.status_code == 200:
                         logger.info("Successfully connected to E-Trade via cached token.")
                         return True
@@ -104,8 +105,8 @@ class ETradeRealConnector:
             self.token_file.parent.mkdir(parents=True, exist_ok=True)
             with open(self.token_file, "w") as f:
                 json.dump({
-                    "access_token": self.session.access_token,
-                    "access_token_secret": self.session.access_token_secret
+                    "access_token": self.session.access_token,  # type: ignore
+                    "access_token_secret": self.session.access_token_secret  # type: ignore
                 }, f)
 
             logger.info("Successfully authenticated with E-Trade.")
@@ -117,7 +118,7 @@ class ETradeRealConnector:
     def is_connected(self) -> bool:
         return self.session is not None
 
-    async def get_option_chains(self, symbol: str, expiry_year: int = None, expiry_month: int = None) -> dict:
+    async def get_option_chains(self, symbol: str, expiry_year: Optional[int] = None, expiry_month: Optional[int] = None) -> dict:
         """Fetch option chains for a specific symbol asynchronously."""
         if not self.session:
             raise RuntimeError("Not connected to E-Trade. Call connect() first.")
@@ -131,9 +132,10 @@ class ETradeRealConnector:
         if expiry_month:
             params["expiryMonth"] = str(expiry_month)
 
+        session = self.session
         def _fetch():
-            resp = self.session.get(url, params=params)
+            resp = session.get(url, params=params)  # type: ignore
             resp.raise_for_status()
             return resp.json()
 
-        return await asyncio.to_thread(_fetch)
+        return await asyncio.to_thread(_fetch)  # type: ignore

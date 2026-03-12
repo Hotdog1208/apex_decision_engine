@@ -8,12 +8,12 @@ import asyncio
 import logging
 from datetime import datetime
 from pathlib import Path
-from dotenv import load_dotenv
+from dotenv import load_dotenv  # type: ignore
 
 # Ensure environment variables are loaded
 load_dotenv()
 
-from engine.api.etrade_real_connector import ETradeRealConnector
+from engine.api.etrade_real_connector import ETradeRealConnector  # type: ignore
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
@@ -49,7 +49,7 @@ class UOAScanner:
 
         if all_anomalies:
             self.save_anomalies(all_anomalies)
-            import requests
+            import requests  # type: ignore
             for anomaly in all_anomalies:
                 try:
                     res = requests.post("http://localhost:8000/internal/uoa_alert", json=anomaly, timeout=2)
@@ -93,7 +93,7 @@ class UOAScanner:
                 iv = float(call_info.get("impliedVolatility", 0.0) or 0.0)
                 strike = float(call_info.get("strikePrice", 0.0))
 
-                total_calls_vol += vol
+                total_calls_vol += vol  # type: ignore
                 if iv > 0:
                     iv_sum += iv
                     iv_count += 1
@@ -108,7 +108,7 @@ class UOAScanner:
                         "type": "CALL",
                         "volume": vol,
                         "open_interest": oi,
-                        "vol_oi_ratio": round(vol / oi, 2),
+                        "vol_oi_ratio": round(vol / oi, 2),  # type: ignore
                         "iv": iv
                     })
 
@@ -119,7 +119,7 @@ class UOAScanner:
                 iv = float(put_info.get("impliedVolatility", 0.0) or 0.0)
                 strike = float(put_info.get("strikePrice", 0.0))
 
-                total_puts_vol += vol
+                total_puts_vol += vol  # type: ignore
                 if iv > 0:
                     iv_sum += iv
                     iv_count += 1
@@ -134,18 +134,18 @@ class UOAScanner:
                         "type": "PUT",
                         "volume": vol,
                         "open_interest": oi,
-                        "vol_oi_ratio": round(vol / oi, 2),
+                        "vol_oi_ratio": round(vol / oi, 2),  # type: ignore
                         "iv": iv
                     })
 
         # Calculate Chain-wide Aggregates
-        pcr = total_puts_vol / total_calls_vol if total_calls_vol > 0 else 0
+        pcr = total_puts_vol / total_calls_vol if total_calls_vol > 0 else 0  # type: ignore
         avg_iv = iv_sum / iv_count if iv_count > 0 else 0
         logger.info(f"[{ticker}] Chain Parse Complete. Processed {len(pairs)} strikes. PCR: {pcr:.2f} | Avg IV: {avg_iv:.2f}")
 
         # Post-process for IV Spikes
         for anomaly in anomalies:
-            if anomaly["iv"] > (avg_iv * 1.5):
+            if anomaly["iv"] > (avg_iv * 1.5):  # type: ignore
                 anomaly["iv_spike"] = True
             else:
                 anomaly["iv_spike"] = False

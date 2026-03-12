@@ -7,7 +7,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from engine.core.signal_engine import SignalOutput
+from engine.core.signal_engine import SignalOutput  # type: ignore
 
 
 @dataclass
@@ -44,13 +44,13 @@ class BaseStrategy(ABC):
     @abstractmethod
     def name(self) -> str:
         """Strategy identifier."""
-        pass
+        ...
 
     @property
     @abstractmethod
     def asset_class(self) -> str:
         """Target asset class: stock, option, future."""
-        pass
+        ...
 
     @abstractmethod
     def evaluate(
@@ -61,4 +61,4 @@ class BaseStrategy(ABC):
         futures_chain: Optional[Dict[str, Any]] = None,
     ) -> List[TradeCandidate]:
         """Evaluate signals and market data, produce trade candidates."""
-        pass
+        ...

@@ -17,11 +17,11 @@ def compute_drawdown(equity_curve: List[float]) -> DrawdownResult:
     if not equity_curve:
         return DrawdownResult(0.0, 0, 0.0)
 
-    peak = equity_curve[0]
-    max_dd = 0.0
-    max_dd_dur = 0
-    current_dd_dur = 0
-    current_dd = 0.0
+    peak: float = equity_curve[0]  # type: ignore
+    max_dd: float = 0.0
+    max_dd_dur: int = 0
+    current_dd_dur: int = 0
+    current_dd: float = 0.0
 
     for eq in equity_curve:
         if eq > peak:
@@ -32,7 +32,7 @@ def compute_drawdown(equity_curve: List[float]) -> DrawdownResult:
             if dd > max_dd:
                 max_dd = dd
             current_dd = dd
-            current_dd_dur += 1
+            current_dd_dur += 1  # type: ignore
             if current_dd_dur > max_dd_dur:
                 max_dd_dur = current_dd_dur
 

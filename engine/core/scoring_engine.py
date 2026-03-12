@@ -9,8 +9,8 @@ from datetime import datetime
 from typing import Any, Dict, Optional
 from uuid import uuid4
 
-from config.system_config import ScoringConfig, get_default_system_config
-from engine.strategies.base_strategy import TradeCandidate
+from config.system_config import ScoringConfig, get_default_system_config  # type: ignore
+from engine.strategies.base_strategy import TradeCandidate  # type: ignore
 
 
 def _clamp(value: float) -> float:
@@ -136,13 +136,13 @@ class ScoredTrade:
             "strategy": c.strategy,
             "direction": c.direction,
             "position_details": self._build_position_details(c, qty, entry, mult, stop, target),
-            "confidence_score": round(self.confidence_score, 2),
+            "confidence_score": round(self.confidence_score, 2),  # type: ignore
             "confidence_breakdown": {
-                "structure_score": round(self.structure_score, 2),
-                "volatility_score": round(self.volatility_score, 2),
-                "liquidity_score": round(self.liquidity_score, 2),
-                "risk_reward_score": round(self.risk_reward_score, 2),
-                "strategy_fit_score": round(self.strategy_fit_score, 2),
+                "structure_score": round(self.structure_score, 2),  # type: ignore
+                "volatility_score": round(self.volatility_score, 2),  # type: ignore
+                "liquidity_score": round(self.liquidity_score, 2),  # type: ignore
+                "risk_reward_score": round(self.risk_reward_score, 2),  # type: ignore
+                "strategy_fit_score": round(self.strategy_fit_score, 2),  # type: ignore
             },
             "capital_allocated": capital_allocated,
             "risk_per_trade": risk_per_trade,

@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from config.system_config import SignalConfig, get_default_system_config
+from config.system_config import SignalConfig, get_default_system_config  # type: ignore
 
 
 class RegimeType(Enum):
@@ -154,18 +154,18 @@ class SignalEngine:
         ret_20 = returns_20d
         ret_10 = returns_10d
         if ret_20 is None and prices and len(prices) >= cfg.lookback_periods:
-            short = prices[-cfg.lookback_periods:]
+            short = prices[-cfg.lookback_periods:]  # type: ignore
             ret_20 = _compute_returns(short)
         if ret_10 is None and prices and len(prices) >= cfg.volatility_lookback:
-            short = prices[-cfg.volatility_lookback:]
+            short = prices[-cfg.volatility_lookback:]  # type: ignore
             ret_10 = _compute_returns(short)
 
         vol_20 = volatility_20d
         vol_10 = volatility_10d
         if vol_20 is None and prices and len(prices) >= cfg.lookback_periods:
-            vol_20 = _compute_volatility(prices[-cfg.lookback_periods:])
+            vol_20 = _compute_volatility(prices[-cfg.lookback_periods:])  # type: ignore
         if vol_10 is None and prices and len(prices) >= cfg.volatility_lookback:
-            vol_10 = _compute_volatility(prices[-cfg.volatility_lookback:])
+            vol_10 = _compute_volatility(prices[-cfg.volatility_lookback:])  # type: ignore
 
         regime = self._detect_regime(ret_20, ret_10, high_20d, low_20d, prices)
         vol_regime = self._detect_volatility_regime(vol_20, vol_10)
@@ -209,9 +209,9 @@ class SignalEngine:
             mean_reversion_signal=mr_signal,
             composite_score=composite,
             reasoning={
-                "regime_detection": reasoning_regime,
-                "mean_reversion": reasoning_mr,
-                "volatility_regime": vol_regime.value,
+                "regime_detection": str(reasoning_regime),
+                "mean_reversion": str(reasoning_mr),
+                "volatility_regime": str(vol_regime.value),
             },
         )
 
@@ -276,10 +276,10 @@ class SignalEngine:
 
     def process_uoa_anomaly(self, anomaly: Dict[str, Any]) -> tuple[float, Dict[str, Any]]:
         """Process an unusual options activity anomaly through the XGBoost ML pipeline."""
-        from engine.ml_models.uoa_xgboost import UOAModelPipeline
-        from config.system_config import get_default_system_config
+        from engine.ml_models.uoa_xgboost import UOAModelPipeline  # type: ignore
+        from config.system_config import get_default_system_config  # type: ignore
         pipeline = UOAModelPipeline(data_source=get_default_system_config().data_source)
-        ticker = anomaly.get("ticker")
+        ticker = anomaly.get("ticker", "")
         
         # History is fetched by the model pipeline to engineer features
         history_data = pipeline.market_adapter.fetch_ohlc(ticker, period="3mo", interval="1d")

@@ -7,18 +7,26 @@ import os
 import json
 import logging
 from pathlib import Path
-import pandas as pd
-import numpy as np
+import pandas as pd  # type: ignore
+import numpy as np  # type: ignore
+from typing import Optional, Dict, List, Any
 
 try:
-    import xgboost as xgb
-    from sklearn.model_selection import train_test_split
-    from sklearn.metrics import accuracy_score, classification_report
+    import xgboost as base_xgb  # type: ignore
+    from sklearn.model_selection import train_test_split as base_tts  # type: ignore
+    from sklearn.metrics import accuracy_score as base_acc, classification_report as base_cr  # type: ignore
+    xgb: Any = base_xgb
+    train_test_split: Any = base_tts
+    accuracy_score: Any = base_acc
+    classification_report: Any = base_cr
 except ImportError:
-    xgb = None
+    xgb: Any = None
+    train_test_split: Any = None
+    accuracy_score: Any = None
+    classification_report: Any = None
 
 # Using the unified adapter instead of etrade_real_connector directly
-from engine.api.market_data_adapter import MockMarketDataAdapter, YahooMarketDataAdapter
+from engine.api.market_data_adapter import MockMarketDataAdapter, YahooMarketDataAdapter  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +41,7 @@ class UOAModelPipeline:
         else:
             self.market_adapter = YahooMarketDataAdapter()
         
-        self.model = None
+        self.model: Any = None
 
     def _calculate_macd_rsi(self, history: pd.DataFrame) -> pd.DataFrame:
         """Calculate basic MACD and RSI for trend alignment."""
@@ -55,7 +63,7 @@ class UOAModelPipeline:
         
         return df
 
-    def engineer_features(self, anomaly: dict, history: list) -> dict:
+    def engineer_features(self, anomaly: dict, history: list) -> Optional[dict]:
         """
         Merge an anomaly with daily OHLCV history to create model features.
         Calculates UOA Magnitude, DTE, Moneyness, and Trend Alignment.
@@ -168,8 +176,8 @@ class UOAModelPipeline:
 
     def train_model(self):
         """Train XGBoost model on the UOA dataset and save it."""
-        if xgb is None:
-            logger.error("XGBoost is not installed. Run `pip install xgboost scikit-learn`.")
+        if xgb is None or train_test_split is None or accuracy_score is None:
+            logger.error("XGBoost or sklearn is not installed. Run `pip install xgboost scikit-learn`.")
             return False
             
         logger.info("Preparing training dataset...")
@@ -184,9 +192,9 @@ class UOAModelPipeline:
         X = df[['vol_oi_ratio', 'iv', 'dte', 'moneyness', 'macd_hist', 'rsi', 'trend_alignment']]
         y = df['target']
         
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)  # type: ignore
         
-        self.model = xgb.XGBClassifier(
+        self.model = xgb.XGBClassifier(  # type: ignore
             n_estimators=100,
             max_depth=4,
             learning_rate=0.1,
@@ -198,7 +206,7 @@ class UOAModelPipeline:
         self.model.fit(X_train, y_train)
         
         preds = self.model.predict(X_test)
-        logger.info(f"Accuracy: {accuracy_score(y_test, preds):.2f}")
+        logger.info(f"Accuracy: {accuracy_score(y_test, preds):.2f}")  # type: ignore
         
         self.model.save_model(MODEL_PATH)
         logger.info(f"Model saved to {MODEL_PATH}")
@@ -217,7 +225,7 @@ class UOAModelPipeline:
         trend = np.random.choice([0, 1], n)
         
         # Synthetic target logic
-        prob = (vol_oi > 5) * 0.3 + (dte < 10) * 0.2 + (trend == 1) * 0.3 + (np.abs(moneyness) < 0.05) * 0.2
+        prob = np.where(vol_oi > 5, 0.3, 0.0) + np.where(dte < 10, 0.2, 0.0) + np.where(trend == 1, 0.3, 0.0) + np.where(np.abs(moneyness) < 0.05, 0.2, 0.0)
         target = (np.random.uniform(0, 1, n) < prob).astype(int)
         
         return pd.DataFrame({

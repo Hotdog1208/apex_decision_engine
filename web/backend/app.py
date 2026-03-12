@@ -55,7 +55,7 @@ app.add_middleware(
 # Engine state
 engine: DecisionEngine | None = None
 _data_source = os.environ.get("DATA_SOURCE", "mock").strip().lower()
-connector = YahooConnector(project_root / "data") if _data_source == "yahoo" else MockETradeConnector(project_root / "data")
+connector = YahooConnector(str(project_root / "data")) if _data_source == "yahoo" else MockETradeConnector(str(project_root / "data"))
 active_trades: List[Dict[str, Any]] = []
 portfolio_value = 1_000_000.0
 websocket_clients: List[WebSocket] = []
@@ -569,7 +569,6 @@ async def process_uoa_alert(anomaly: Dict[str, Any]) -> Dict[str, Any]:
                     "features": features
                 }
             }
-            global websocket_clients
             for ws in websocket_clients:
                 try:
                     await ws.send_json(payload)
