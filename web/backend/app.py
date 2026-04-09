@@ -17,8 +17,9 @@ import sys
 project_root = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect  # type: ignore
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request  # type: ignore
 from fastapi.middleware.cors import CORSMiddleware  # type: ignore
+from fastapi.responses import JSONResponse  # type: ignore
 from pydantic import BaseModel  # type: ignore
 
 import os
@@ -51,6 +52,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    logger.error(f"Unhandled exception: {exc}", exc_info=True)
+    return JSONResponse(status_code=500, content={"error": str(exc)})
 
 # Engine state
 engine: DecisionEngine | None = None

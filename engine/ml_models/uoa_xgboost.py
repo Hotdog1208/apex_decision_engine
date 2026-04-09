@@ -129,12 +129,16 @@ class UOAModelPipeline:
         Load historical UOA anomalies, fetch corresponding price history to engineer features,
         and calculate forward returns to create the Target variable (Y).
         """
-        if not DATA_FILE.exists():
-            logger.warning(f"No UOA anomalies found at {DATA_FILE}")
+        if not DATA_FILE.exists() or DATA_FILE.stat().st_size == 0:
+            logger.warning(f"No UOA anomalies found at {DATA_FILE} or file is empty.")
             return pd.DataFrame()
             
-        with open(DATA_FILE, "r") as f:
-            anomalies = json.load(f)
+        try:
+            with open(DATA_FILE, "r") as f:
+                anomalies = json.load(f)
+        except Exception as e:
+            logger.error(f"Failed to load UOA data: {e}")
+            return pd.DataFrame()
             
         data = []
         for anomaly in anomalies:

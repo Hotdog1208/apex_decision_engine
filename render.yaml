@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: apex-engine-api
+    env: python
+    buildCommand: "pip install -r web/requirements.txt"
+    startCommand: "uvicorn web.backend.app:app --host 0.0.0.0 --port $PORT"
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      - key: DATA_SOURCE
+        value: mock

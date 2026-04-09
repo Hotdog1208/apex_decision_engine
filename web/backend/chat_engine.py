@@ -57,16 +57,16 @@ def build_rag_context(user_message: str, connector: Any) -> str:
     # 1. Read UOA Anomalies
     uoa_file = connector.data_dir / "uoa_anomalies.json"
     anomalies = []
-    if uoa_file.exists():
-        try:
+    try:
+        if uoa_file.exists() and uoa_file.stat().st_size > 0:
             with open(uoa_file, "r") as f:
                 data: List[Dict[str, Any]] = json.load(f)  # type: ignore
                 if ticker:
                     anomalies = [a for a in data if a.get("ticker") == ticker]
-                if not anomalies:
+                if not anomalies and data:
                     anomalies = list(data)[-5:]  # Get the last 5 if no ticker match  # type: ignore
-        except Exception as e:
-            logger.error(f"Failed to load UOA data: {e}")
+    except Exception as e:
+        logger.error(f"Failed to load UOA data: {e}")
             
     if not anomalies:
         context_blocks.append("No recent UOA anomalies found in the local database.")
@@ -120,6 +120,19 @@ async def chat_completion(
     connector: Any,
 ) -> str:
     """Call Google Gemini API with RAG context."""
+    uoa_file = connector.data_dir / "uoa_anomalies.json"
+    has_valid_data = False
+    try:
+        if uoa_file.exists() and uoa_file.stat().st_size > 0:
+            with open(uoa_file, "r") as f:
+                if json.load(f):
+                    has_valid_data = True
+    except Exception:
+        pass
+        
+    if not has_valid_data:
+        return "System is actively scanning E-Trade Sandbox for unusual options activity. No anomalies detected yet."
+
     api_key = os.environ.get("GEMINI_API_KEY", "").strip()
     if not api_key:
         last_msg = (messages[-1].get("content", "") or "").strip() if messages else ""

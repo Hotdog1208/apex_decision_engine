@@ -62,6 +62,10 @@ class MockETradeConnector(ETradeConnector):
         return self._market_data
 
     @property
+    def data_dir(self):
+        return self._data_dir
+
+    @property
     def orders(self) -> OrderAdapter:
         return self._orders
 
@@ -93,6 +97,10 @@ class YahooConnector(ETradeConnector):
         return self._market_data
 
     @property
+    def data_dir(self):
+        return self._data_dir
+
+    @property
     def orders(self) -> OrderAdapter:
         return self._orders
 
@@ -112,6 +120,6 @@ class YahooConnector(ETradeConnector):
 #     """Real E*TRADE API connector. Requires: consumer_key, consumer_secret, access_token, access_token_secret."""
 #     def __init__(self, consumer_key: str, consumer_secret: str, ...):
 #         # OAuth 1.0a flow
-#         # Market API: https://api.etrade.com/v1/market/
-#         # Order API: https://api.etrade.com/v1/accounts/{accountId}/orders
+#         # Market API: https://apisb.etrade.com/v1/market/
+#         # Order API: https://apisb.etrade.com/v1/accounts/{accountId}/orders
 #         pass

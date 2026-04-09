@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { motion, useScroll, useTransform, useSpring } from 'framer-motion'
 import { BarChart3, MessageCircle, Bell, TrendingUp, Shield, Zap } from 'lucide-react'
 import MagneticButton from '../components/MagneticButton'
+import PageWrapper from '../components/PageWrapper'
 import GlitchText from '../components/GlitchText'
 
 function StaticNoiseVideo() {
@@ -226,7 +227,7 @@ export default function Landing() {
   const opacity = useTransform(scrollYProgress, [0, 0.05], [0, 1])
 
   return (
-    <div className="bg-transparent pb-32">
+    <PageWrapper className="bg-transparent pb-32">
       <HeroSection />
 
       {/* Extreme Stats / value strip */}
@@ -379,6 +380,6 @@ export default function Landing() {
           </div>
         </div>
       </footer>
-    </div>
+    </PageWrapper>
   )
 }
