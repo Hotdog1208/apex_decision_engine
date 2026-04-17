@@ -15,7 +15,7 @@ from dotenv import load_dotenv  # type: ignore
 
 load_dotenv()
 
-async def test_chat():
+async def _test_chat():
     print("Testing RAG Chatbot with Gemini...")
     print(f"GEMINI_API_KEY set: {bool(os.environ.get('GEMINI_API_KEY'))}")
     
@@ -48,5 +48,8 @@ async def test_chat():
     except Exception as e:
         print(f"\nFAILED: {e}")
 
+def test_chat_sync():
+    asyncio.run(_test_chat())
+
 if __name__ == "__main__":
-    asyncio.run(test_chat())
+    test_chat_sync()

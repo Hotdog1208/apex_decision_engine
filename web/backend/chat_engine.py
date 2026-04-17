@@ -7,7 +7,7 @@ import json
 import os
 import logging
 from typing import Any, Callable, Dict, List
-import google.generativeai as genai  # type: ignore
+from google import genai  # type: ignore
 from engine.ml_models.uoa_xgboost import UOAModelPipeline  # type: ignore
 
 logger = logging.getLogger(__name__)
@@ -139,9 +139,8 @@ async def chat_completion(
         return _demo_reply(last_msg, get_engine, connector)
 
     try:
-        genai.configure(api_key=api_key)  # type: ignore
+        client = genai.Client(api_key=api_key)  # type: ignore
         model_name = os.environ.get("GEMINI_CHAT_MODEL", "gemini-1.5-pro")
-        model = genai.GenerativeModel(model_name)  # type: ignore
     except Exception as e:
         return f"[Error configuring Gemini API: {e}]"
 
@@ -175,7 +174,7 @@ async def chat_completion(
         gemini_messages.append({"role": role, "parts": [content]})
 
     try:
-        response = model.generate_content(gemini_messages)
+        response = client.models.generate_content(model=model_name, contents=gemini_messages)
         return response.text
     except Exception as e:
         logger.error(f"Gemini API Error: {e}")

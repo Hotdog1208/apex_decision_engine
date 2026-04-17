@@ -17,7 +17,7 @@ import sys
 project_root = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request  # type: ignore
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, Depends, HTTPException, status  # type: ignore
 from fastapi.middleware.cors import CORSMiddleware  # type: ignore
 from fastapi.responses import JSONResponse  # type: ignore
 from pydantic import BaseModel  # type: ignore
@@ -126,8 +126,33 @@ async def startup():
         logger.info("Chat: Gemini enabled")
 
 
-# --- Routes ---
+# --- Auth components needed by endpoints ---
+from datetime import datetime, timedelta
+from jose import JWTError, jwt  # type: ignore
+from passlib.context import CryptContext  # type: ignore
 
+SECRET_KEY = os.environ.get("ADE_SECRET_KEY", "ade-dev-secret-change-in-production")
+if len(SECRET_KEY) < 32:
+    raise ValueError("ADE_SECRET_KEY must be at least 32 characters long.")
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 60
+REFRESH_TOKEN_EXPIRE_DAYS = 7
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+from fastapi.security import OAuth2PasswordBearer
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
+
+async def get_current_user(token: str = Depends(oauth2_scheme)):
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        email: str = payload.get("sub")
+        if email is None:
+            raise HTTPException(status_code=401, detail="Invalid auth token")
+        return email
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid auth token")
+
+
+# --- Routes ---
 @app.get("/portfolio")
 async def get_portfolio(user: str = Depends(get_current_user)) -> Dict[str, Any]:
     """Current portfolio state. Never 500."""
@@ -328,34 +353,7 @@ async def websocket_endpoint(websocket: WebSocket):
         websocket_clients.remove(websocket)
 
 
-# --- Auth (simple JWT, in-memory users) ---
-import os
-from datetime import datetime, timedelta
-from jose import JWTError, jwt  # type: ignore
-from passlib.context import CryptContext  # type: ignore
-
-SECRET_KEY = os.environ.get("ADE_SECRET_KEY", "ade-dev-secret-change-in-production")
-if len(SECRET_KEY) < 32:
-    raise ValueError("ADE_SECRET_KEY must be at least 32 characters long.")
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60
-REFRESH_TOKEN_EXPIRE_DAYS = 7
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
-from fastapi import Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordBearer
-import re
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
-
-async def get_current_user(token: str = Depends(oauth2_scheme)):
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        email: str = payload.get("sub")
-        if email is None:
-            raise HTTPException(status_code=401, detail="Invalid auth token")
-        return email
-    except JWTError:
-        raise HTTPException(status_code=401, detail="Invalid auth token")
+# Auth routes below
 
 def create_refresh_token(data: dict) -> str:
     to_encode = data.copy()

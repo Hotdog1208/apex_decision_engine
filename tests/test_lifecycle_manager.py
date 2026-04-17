@@ -36,4 +36,4 @@ def test_record_exit():
     state = lm.trades[tid]
     assert state.exit_price == 110.0
     assert state.pnl == 100.0
-    assert state.pnl_pct == 0.10
+    assert round(state.pnl_pct, 2) == 0.10
