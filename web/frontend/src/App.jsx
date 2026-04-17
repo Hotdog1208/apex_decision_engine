@@ -1,35 +1,38 @@
 import { useState, useEffect } from 'react'
 import { BrowserRouter, Routes, Route, NavLink, useLocation, useNavigate } from 'react-router-dom'
 import { ThemeProvider, useTheme } from './context/ThemeContext'
-import Dashboard from './components/Dashboard'
-import LiveTrading from './pages/LiveTrading'
-import Analytics from './pages/Analytics'
-import Strategies from './pages/Strategies'
-import Settings from './pages/Settings'
-import Chat from './pages/Chat'
-import Landing from './pages/Landing'
-import Alerts from './pages/Alerts'
-import News from './pages/News'
-import Calendar from './pages/Calendar'
-import Charts from './pages/Charts'
-import Screener from './pages/Screener'
-import Heatmap from './pages/Heatmap'
-import Watchlists from './pages/Watchlists'
-import PriceAlerts from './pages/PriceAlerts'
-import RiskTools from './pages/RiskTools'
-import Login from './pages/Login'
-import Signup from './pages/Signup'
-import Privacy from './pages/Privacy'
-import Terms from './pages/Terms'
-import RiskDisclosure from './pages/RiskDisclosure'
-import Glossary from './pages/Glossary'
-import FAQ from './pages/FAQ'
-import Disclaimer from './pages/Disclaimer'
+import { Suspense, lazy } from 'react'
+
+const Dashboard = lazy(() => import('./components/Dashboard'))
+const LiveTrading = lazy(() => import('./pages/LiveTrading'))
+const Analytics = lazy(() => import('./pages/Analytics'))
+const Strategies = lazy(() => import('./pages/Strategies'))
+const Settings = lazy(() => import('./pages/Settings'))
+const Chat = lazy(() => import('./pages/Chat'))
+const Landing = lazy(() => import('./pages/Landing'))
+const Alerts = lazy(() => import('./pages/Alerts'))
+const News = lazy(() => import('./pages/News'))
+const Calendar = lazy(() => import('./pages/Calendar'))
+const Charts = lazy(() => import('./pages/Charts'))
+const Screener = lazy(() => import('./pages/Screener'))
+const Heatmap = lazy(() => import('./pages/Heatmap'))
+const Watchlists = lazy(() => import('./pages/Watchlists'))
+const PriceAlerts = lazy(() => import('./pages/PriceAlerts'))
+const RiskTools = lazy(() => import('./pages/RiskTools'))
+const Login = lazy(() => import('./pages/Login'))
+const Signup = lazy(() => import('./pages/Signup'))
+const Privacy = lazy(() => import('./pages/Privacy'))
+const Terms = lazy(() => import('./pages/Terms'))
+const RiskDisclosure = lazy(() => import('./pages/RiskDisclosure'))
+const Glossary = lazy(() => import('./pages/Glossary'))
+const FAQ = lazy(() => import('./pages/FAQ'))
+const Disclaimer = lazy(() => import('./pages/Disclaimer'))
 import CommandPalette from './components/CommandPalette'
 import BackendStatus from './components/BackendStatus'
 import NoiseOverlay from './components/NoiseOverlay'
 import GlitchText from './components/GlitchText'
 import { AuthProvider, useAuth } from './context/AuthContext'
+import { Toaster, toast } from 'react-hot-toast'
 import { Sun, Moon, Command, ChevronDown, LayoutDashboard, Zap, MoreHorizontal, Bell, MessageCircle, Shield, Settings as SettingsIcon, LogOut, User } from 'lucide-react'
 
 function ThemeToggle() {
@@ -259,34 +262,41 @@ function App() {
 
           <div className="relative z-10">
             <BackendStatus />
+            <Toaster position="top-right" toastOptions={{
+              className: 'cyber-panel bg-black/90 border border-apex-cyan text-white font-data text-xs uppercase tracking-widest rounded-none shadow-[0_0_20px_rgba(0,240,255,0.2)]',
+              success: { iconTheme: { primary: '#00F0FF', secondary: '#000' } },
+              error: { iconTheme: { primary: '#FF0055', secondary: '#000' }, className: 'cyber-panel bg-black/90 border border-apex-loss text-white font-data text-xs uppercase tracking-widest rounded-none shadow-[0_0_20px_rgba(255,0,85,0.2)]' }
+            }} />
             <AppNav />
             <main className="max-w-[1400px] mx-auto px-4 py-8">
-              <Routes>
-                <Route path="/" element={<Landing />} />
-                <Route path="/login" element={<Login />} />
-                <Route path="/signup" element={<Signup />} />
-                <Route path="/dashboard" element={<Dashboard />} />
-                <Route path="/chat" element={<Chat />} />
-                <Route path="/trading" element={<LiveTrading />} />
-                <Route path="/alerts" element={<Alerts />} />
-                <Route path="/news" element={<News />} />
-                <Route path="/calendar" element={<Calendar />} />
-                <Route path="/charts" element={<Charts />} />
-                <Route path="/screener" element={<Screener />} />
-                <Route path="/heatmap" element={<Heatmap />} />
-                <Route path="/watchlists" element={<Watchlists />} />
-                <Route path="/price-alerts" element={<PriceAlerts />} />
-                <Route path="/risk-tools" element={<RiskTools />} />
-                <Route path="/strategies" element={<Strategies />} />
-                <Route path="/analytics" element={<Analytics />} />
-                <Route path="/settings" element={<Settings />} />
-                <Route path="/privacy" element={<Privacy />} />
-                <Route path="/terms" element={<Terms />} />
-                <Route path="/risk-disclosure" element={<RiskDisclosure />} />
-                <Route path="/glossary" element={<Glossary />} />
-                <Route path="/faq" element={<FAQ />} />
-                <Route path="/disclaimer" element={<Disclaimer />} />
-              </Routes>
+              <Suspense fallback={<div className="p-20 text-center text-apex-cyan animate-pulse font-data">Loading Route Chunk...</div>}>
+                <Routes>
+                  <Route path="/" element={<Landing />} />
+                  <Route path="/login" element={<Login />} />
+                  <Route path="/signup" element={<Signup />} />
+                  <Route path="/dashboard" element={<Dashboard />} />
+                  <Route path="/chat" element={<Chat />} />
+                  <Route path="/trading" element={<LiveTrading />} />
+                  <Route path="/alerts" element={<Alerts />} />
+                  <Route path="/news" element={<News />} />
+                  <Route path="/calendar" element={<Calendar />} />
+                  <Route path="/charts" element={<Charts />} />
+                  <Route path="/screener" element={<Screener />} />
+                  <Route path="/heatmap" element={<Heatmap />} />
+                  <Route path="/watchlists" element={<Watchlists />} />
+                  <Route path="/price-alerts" element={<PriceAlerts />} />
+                  <Route path="/risk-tools" element={<RiskTools />} />
+                  <Route path="/strategies" element={<Strategies />} />
+                  <Route path="/analytics" element={<Analytics />} />
+                  <Route path="/settings" element={<Settings />} />
+                  <Route path="/privacy" element={<Privacy />} />
+                  <Route path="/terms" element={<Terms />} />
+                  <Route path="/risk-disclosure" element={<RiskDisclosure />} />
+                  <Route path="/glossary" element={<Glossary />} />
+                  <Route path="/faq" element={<FAQ />} />
+                  <Route path="/disclaimer" element={<Disclaimer />} />
+                </Routes>
+              </Suspense>
             </main>
           </div>
         </div>

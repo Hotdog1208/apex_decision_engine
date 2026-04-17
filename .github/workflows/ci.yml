@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: "3.11"
+        cache: 'pip'
+
+    - name: Install Backend Dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r web/requirements.txt
+        pip install pytest
+
+    - name: Run Backend Tests
+      run: |
+        # Provide dummy secrete key for startup checks
+        export ADE_SECRET_KEY="test_secret_key_needs_to_be_32_characters_long_minimum!"
+        python -m pytest tests/ -v
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: "18"
+        cache: 'npm'
+        cache-dependency-path: web/frontend/package-lock.json
+
+    - name: Build Frontend
+      working-directory: web/frontend
+      run: |
+        npm install
+        npm run build

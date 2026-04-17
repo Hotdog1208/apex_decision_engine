@@ -27,3 +27,6 @@ web/frontend/dist/
 Thumbs.db
 
 .vercel
+
+# Artifacts/logs
+*.txt

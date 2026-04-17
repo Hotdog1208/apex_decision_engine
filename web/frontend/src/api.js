@@ -1,5 +1,6 @@
 // Use /api when frontend proxies to backend (dev). Override for production.
-const API_BASE = import.meta.env.VITE_API_BASE || '/api'
+const API_BASE = import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE || '/api'
+import toast from 'react-hot-toast'
 
 function getAuthHeaders() {
   const token = typeof localStorage !== 'undefined' ? localStorage.getItem('ade_token') : null
@@ -65,8 +66,16 @@ export const api = {
   getPortfolio: () => fetchApi('/portfolio'),
   getTrades: (activeOnly) => fetchApi(activeOnly ? '/trades?active_only=true' : '/trades'),
   runEngine: () => postApi('/trades/run'),
-  approveTrade: (tradeId) => postApi('/trades/approve', { trade_id: tradeId }),
-  closeTrade: (tradeId, reason) => deleteApi(`/trades/${tradeId}?exit_reason=${reason || 'manual'}`),
+  approveTrade: async (tradeId) => {
+    const res = await postApi('/trades/approve', { trade_id: tradeId })
+    toast.success('Trade approved')
+    return res
+  },
+  closeTrade: async (tradeId, reason) => {
+    const res = await deleteApi(`/trades/${tradeId}?exit_reason=${reason || 'manual'}`)
+    toast.success('Trade closed')
+    return res
+  },
   getAnalytics: () => fetchApi('/analytics'),
   getSignals: () => fetchApi('/signals'),
   getConfig: () => fetchApi('/config'),
@@ -84,18 +93,44 @@ export const api = {
   getChart: (symbol, period = '3mo', interval = '1d') =>
     fetchApi('/chart/' + encodeURIComponent(symbol) + '?period=' + encodeURIComponent(period) + '&interval=' + encodeURIComponent(interval)),
   getWatchlists: () => fetchApi('/watchlists'),
-  addToWatchlist: (name, symbol) => postApi('/watchlists/' + encodeURIComponent(name) + '?symbol=' + encodeURIComponent(symbol)),
-  removeFromWatchlist: (name, symbol) => deleteApi('/watchlists/' + encodeURIComponent(name) + '/' + encodeURIComponent(symbol)),
+  addToWatchlist: async (name, symbol) => {
+    const res = await postApi('/watchlists/' + encodeURIComponent(name) + '?symbol=' + encodeURIComponent(symbol))
+    toast.success(`${symbol} added to ${name}`)
+    return res
+  },
+  removeFromWatchlist: async (name, symbol) => {
+    const res = await deleteApi('/watchlists/' + encodeURIComponent(name) + '/' + encodeURIComponent(symbol))
+    toast.success(`${symbol} removed from ${name}`)
+    return res
+  },
   getPriceAlerts: () => fetchApi('/price-alerts'),
-  createPriceAlert: (body) => postApi('/price-alerts', body),
-  deletePriceAlert: (alertId) => deleteApi('/price-alerts/' + encodeURIComponent(alertId)),
+  createPriceAlert: async (body) => {
+    const res = await postApi('/price-alerts', body)
+    toast.success('Price alert created')
+    return res
+  },
+  deletePriceAlert: async (alertId) => {
+    const res = await deleteApi('/price-alerts/' + encodeURIComponent(alertId))
+    toast.success('Price alert deleted')
+    return res
+  },
   exportTrades: () => API_BASE + '/export/trades',
   login: (email, password) => postApi('/auth/login', { email, password }),
   signup: (email, password) => postApi('/auth/signup', { email, password }),
 }
 
 export function useWebSocket(onMessage) {
-  const wsUrl = `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/api/ws`
+  let wsUrl = `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/api/ws`
+  if (import.meta.env.VITE_API_URL) {
+    wsUrl = import.meta.env.VITE_API_URL.replace(/^http/, 'ws') + '/ws'
+  }
+  
+  // Pass token in query per backend requirement
+  const token = typeof localStorage !== 'undefined' ? localStorage.getItem('ade_token') : null
+  if (token) {
+    wsUrl += `?token=${token}`
+  }
+
   const ws = new WebSocket(wsUrl)
   ws.onmessage = (e) => {
     try {

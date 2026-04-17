@@ -45,13 +45,38 @@ app = FastAPI(
     version="1.0.0",
 )
 
+cors_origins_str = os.environ.get("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173")
+origins = [o.strip() for o in cors_origins_str.split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    if request.url.path.startswith("/api") or request.url.path.startswith("/auth"):
+        response.headers["Cache-Control"] = "no-store"
+    return response
+
+import time
+from collections import defaultdict
+auth_rate_limits = defaultdict(list)
+def check_rate_limit(request: Request):
+    ip = request.client.host if request.client else "unknown"
+    now = time.time()
+    auth_rate_limits[ip] = [t for t in auth_rate_limits[ip] if now - t < 60]
+    if len(auth_rate_limits[ip]) >= 10:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=429, detail="Too many requests")
+    auth_rate_limits[ip].append(now)
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
@@ -62,6 +87,14 @@ async def global_exception_handler(request: Request, exc: Exception):
 engine: DecisionEngine | None = None
 _data_source = os.environ.get("DATA_SOURCE", "mock").strip().lower()
 connector = YahooConnector(str(project_root / "data")) if _data_source == "yahoo" else MockETradeConnector(str(project_root / "data"))
+import re
+from fastapi import HTTPException
+def validate_symbol(symbol: str):
+    if not symbol: return "AAPL"
+    if not re.match(r"^[A-Z0-9.-]{1,10}$", symbol.upper()):
+        raise HTTPException(status_code=400, detail="Invalid symbol format")
+    return symbol.upper()
+
 active_trades: List[Dict[str, Any]] = []
 portfolio_value = 1_000_000.0
 websocket_clients: List[WebSocket] = []
@@ -96,7 +129,7 @@ async def startup():
 # --- Routes ---
 
 @app.get("/portfolio")
-async def get_portfolio() -> Dict[str, Any]:
+async def get_portfolio(user: str = Depends(get_current_user)) -> Dict[str, Any]:
     """Current portfolio state. Never 500."""
     try:
         eng = get_engine()
@@ -127,7 +160,7 @@ async def get_portfolio() -> Dict[str, Any]:
 
 
 @app.get("/trades")
-async def get_trades(active_only: bool = False) -> Dict[str, Any]:
+async def get_trades(active_only: bool = False, user: str = Depends(get_current_user)) -> Dict[str, Any]:
     """Get trades - active or all."""
     eng = get_engine()
     output = eng.run()
@@ -138,7 +171,7 @@ async def get_trades(active_only: bool = False) -> Dict[str, Any]:
 
 
 @app.post("/trades/run")
-async def run_engine() -> Dict[str, Any]:
+async def run_engine(user: str = Depends(get_current_user)) -> Dict[str, Any]:
     """Run decision engine and return new trade ideas."""
     eng = get_engine()
     output = eng.run()
@@ -162,7 +195,7 @@ class TradeApprove(BaseModel):
 
 
 @app.post("/trades/approve")
-async def approve_trade(body: TradeApprove) -> Dict[str, Any]:
+async def approve_trade(body: TradeApprove, user: str = Depends(get_current_user)) -> Dict[str, Any]:
     trade_id = body.trade_id
     """Approve trade - transition to active."""
     for t in active_trades:
@@ -178,7 +211,7 @@ async def approve_trade(body: TradeApprove) -> Dict[str, Any]:
 
 
 @app.delete("/trades/{trade_id}")
-async def close_trade(trade_id: str, exit_reason: str = "manual") -> Dict[str, Any]:
+async def close_trade(trade_id: str, exit_reason: str = "manual", user: str = Depends(get_current_user)) -> Dict[str, Any]:
     """Close position."""
     for i, t in enumerate(active_trades):
         if t.get("trade_id") == trade_id:
@@ -196,7 +229,7 @@ async def close_trade(trade_id: str, exit_reason: str = "manual") -> Dict[str, A
 
 
 @app.get("/analytics")
-async def get_analytics() -> Dict[str, Any]:
+async def get_analytics(user: str = Depends(get_current_user)) -> Dict[str, Any]:
     """Performance metrics. Never 500."""
     try:
         perf = PerformanceEngine()
@@ -273,6 +306,16 @@ async def update_config(update: ConfigUpdate) -> Dict[str, Any]:
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     """WebSocket for live updates."""
+    token = websocket.query_params.get("token")
+    if not token:
+        await websocket.close(code=1008)
+        return
+    try:
+        jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+    except JWTError:
+        await websocket.close(code=1008)
+        return
+
     await websocket.accept()
     websocket_clients.append(websocket)
     try:
@@ -292,9 +335,33 @@ from jose import JWTError, jwt  # type: ignore
 from passlib.context import CryptContext  # type: ignore
 
 SECRET_KEY = os.environ.get("ADE_SECRET_KEY", "ade-dev-secret-change-in-production")
+if len(SECRET_KEY) < 32:
+    raise ValueError("ADE_SECRET_KEY must be at least 32 characters long.")
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24
+ACCESS_TOKEN_EXPIRE_MINUTES = 60
+REFRESH_TOKEN_EXPIRE_DAYS = 7
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+from fastapi import Depends, HTTPException, status
+from fastapi.security import OAuth2PasswordBearer
+import re
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
+
+async def get_current_user(token: str = Depends(oauth2_scheme)):
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        email: str = payload.get("sub")
+        if email is None:
+            raise HTTPException(status_code=401, detail="Invalid auth token")
+        return email
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid auth token")
+
+def create_refresh_token(data: dict) -> str:
+    to_encode = data.copy()
+    expire = datetime.utcnow() + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
+    to_encode.update({"exp": expire})
+    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
 
 def create_access_token(data: dict) -> str:
@@ -314,7 +381,7 @@ class UserLogin(BaseModel):
     password: str
 
 
-@app.post("/auth/signup")
+@app.post("/auth/signup", dependencies=[Depends(check_rate_limit)])
 async def signup(body: UserCreate) -> Dict[str, Any]:
     """Register new user (in-memory)."""
     if body.email in users_db:
@@ -324,7 +391,19 @@ async def signup(body: UserCreate) -> Dict[str, Any]:
     return {"access_token": token, "token_type": "bearer", "user": {"email": body.email}}
 
 
-@app.post("/auth/login")
+@app.post("/auth/refresh")
+async def refresh_token(token: str = Depends(oauth2_scheme)) -> Dict[str, Any]:
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        email: str = payload.get("sub")
+        if email is None:
+            raise HTTPException(status_code=401, detail="Invalid token")
+        new_token = create_access_token({"sub": email})
+        return {"access_token": new_token, "token_type": "bearer"}
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+@app.post("/auth/login", dependencies=[Depends(check_rate_limit)])
 async def login(body: UserLogin) -> Dict[str, Any]:
     """Login (in-memory)."""
     user = users_db.get(body.email)
@@ -340,12 +419,15 @@ class ChatMessage(BaseModel):
 
 
 @app.post("/chat")
-async def chat(body: ChatMessage) -> Dict[str, Any]:
+async def chat(body: ChatMessage, user: str = Depends(get_current_user)) -> Dict[str, Any]:
     """Send a message to the AI trading assistant. Returns assistant reply."""
     session_id = body.session_id or "default"
     if session_id not in chat_sessions:
         chat_sessions[session_id] = []
-    chat_sessions[session_id].append({"role": "user", "content": body.message})
+    # Basic injection sanitization
+    sanitized_msg = body.message.replace("ignore previous instructions", "")
+    sanitized_msg = sanitized_msg.replace("system prompt", "")
+    chat_sessions[session_id].append({"role": "user", "content": sanitized_msg})
     messages = list(chat_sessions[session_id])[-20:] # pyre-ignore[16, 6]
     reply = await chat_completion(messages, get_engine, connector)
     chat_sessions[session_id].append({"role": "assistant", "content": reply})
@@ -353,7 +435,7 @@ async def chat(body: ChatMessage) -> Dict[str, Any]:
 
 
 @app.get("/chat/history")
-async def chat_history(session_id: str = "default") -> Dict[str, Any]:
+async def chat_history(session_id: str = "default", user: str = Depends(get_current_user)) -> Dict[str, Any]:
     """Get conversation history for a session."""
     messages = chat_sessions.get(session_id, [])
     return {"messages": messages}
@@ -439,7 +521,7 @@ async def market_snapshot() -> Dict[str, Any]:
 async def quote_route(symbol: str) -> Dict[str, Any]:
     """Single symbol quote. Never 500."""
     try:
-        return connector.market_data.fetch_quote((symbol or "").upper() or "AAPL")
+        return connector.market_data.fetch_quote(validate_symbol(symbol))
     except Exception as e:
         logger.exception("Quote failed: %s", e)
         return {"symbol": (symbol or "").upper(), "price": 0, "bid": 0, "ask": 0, "volume": 0, "timestamp": ""}
@@ -467,10 +549,10 @@ async def quotes_route(symbols: str) -> Dict[str, Any]:
 async def chart_route(symbol: str, period: str = "3mo", interval: str = "1d") -> Dict[str, Any]:
     """OHLCV for charting. Never 500."""
     try:
-        return connector.market_data.fetch_ohlc((symbol or "AAPL").upper(), period=period or "3mo", interval=interval or "1d")
+        return connector.market_data.fetch_ohlc(validate_symbol(symbol), period=period or "3mo", interval=interval or "1d")
     except Exception as e:
         logger.exception("Chart failed: %s", e)
-        return {"symbol": (symbol or "AAPL").upper(), "period": period, "interval": interval, "series": []}
+        return {"symbol": validate_symbol(symbol), "period": period, "interval": interval, "series": []}
 
 
 @app.get("/heatmap")
@@ -486,13 +568,13 @@ async def heatmap() -> Dict[str, Any]:
 
 
 @app.get("/watchlists")
-async def get_watchlists() -> Dict[str, Any]:
+async def get_watchlists(user: str = Depends(get_current_user)) -> Dict[str, Any]:
     """Get all watchlists."""
     return {"watchlists": watchlists}
 
 
 @app.post("/watchlists/{name}")
-async def add_to_watchlist(name: str, symbol: str) -> Dict[str, Any]:
+async def add_to_watchlist(name: str, symbol: str, user: str = Depends(get_current_user)) -> Dict[str, Any]:
     """Add symbol to watchlist."""
     if name not in watchlists:
         watchlists[name] = []
@@ -502,7 +584,7 @@ async def add_to_watchlist(name: str, symbol: str) -> Dict[str, Any]:
 
 
 @app.delete("/watchlists/{name}/{symbol}")
-async def remove_from_watchlist(name: str, symbol: str) -> Dict[str, Any]:
+async def remove_from_watchlist(name: str, symbol: str, user: str = Depends(get_current_user)) -> Dict[str, Any]:
     """Remove symbol from watchlist."""
     if name in watchlists:
         watchlists[name] = [s for s in watchlists[name] if s.upper() != symbol.upper()]
@@ -517,7 +599,7 @@ class PriceAlertCreate(BaseModel):
 
 
 @app.post("/price-alerts")
-async def create_price_alert(body: PriceAlertCreate) -> Dict[str, Any]:
+async def create_price_alert(body: PriceAlertCreate, user: str = Depends(get_current_user)) -> Dict[str, Any]:
     """Create price alert."""
     target = body.target_price or body.price or 0
     from datetime import datetime
@@ -533,13 +615,13 @@ async def create_price_alert(body: PriceAlertCreate) -> Dict[str, Any]:
 
 
 @app.get("/price-alerts")
-async def list_price_alerts() -> Dict[str, Any]:
+async def list_price_alerts(user: str = Depends(get_current_user)) -> Dict[str, Any]:
     """List price alerts."""
     return {"alerts": price_alerts}
 
 
 @app.delete("/price-alerts/{alert_id}")
-async def delete_price_alert(alert_id: str) -> Dict[str, Any]:
+async def delete_price_alert(alert_id: str, user: str = Depends(get_current_user)) -> Dict[str, Any]:
     """Remove a price alert by id."""
     global price_alerts
     before = len(price_alerts)
@@ -548,7 +630,7 @@ async def delete_price_alert(alert_id: str) -> Dict[str, Any]:
 
 
 @app.get("/export/trades")
-async def export_trades() -> Any:
+async def export_trades(user: str = Depends(get_current_user)) -> Any:
     """Export trades as JSON."""
     eng = get_engine()
     output = eng.run()

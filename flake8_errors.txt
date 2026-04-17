@@ -1,3 +1,0 @@
-﻿.\web\backend\app.py:572:13: F824 `global websocket_clients` is unused: name is never assigned in scope
-            global websocket_clients
-            ^

@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
+import ReactMarkdown from 'react-markdown'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Send, MessageCircle, Cpu, Zap, Radio, Terminal } from 'lucide-react'
 import { api } from '../api'
@@ -149,7 +150,9 @@ export default function Chat() {
                         {isUser && <div className="absolute top-0 right-0 w-3 h-3 bg-black transform translate-x-1/2 -translate-y-1/2 rotate-45 border-l border-b border-apex-cyan/50" />}
                         {!isUser && <div className="absolute top-0 left-0 w-3 h-3 bg-black transform -translate-x-1/2 -translate-y-1/2 rotate-45 border-r border-b border-apex-pink/50" />}
 
-                        <div className="whitespace-pre-wrap break-words">{m.content}</div>
+                        <div className="whitespace-pre-wrap break-words">
+                          {isUser ? m.content : <ReactMarkdown className="prose prose-invert max-w-none prose-sm">{m.content}</ReactMarkdown>}
+                        </div>
                       </div>
                     </div>
                   </motion.div>

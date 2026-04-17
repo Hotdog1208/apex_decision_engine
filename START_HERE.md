@@ -7,7 +7,7 @@
 ### 1. Start backend (Terminal 1)
 
 ```powershell
-cd C:\Users\aarav\apex_decision_engine
+cd <your_project_path>
 .\run-backend.ps1
 ```
 
@@ -22,7 +22,7 @@ You should see: `INFO:     Uvicorn running on http://0.0.0.0:8000`
 ### 2. Start frontend (Terminal 2)
 
 ```powershell
-cd C:\Users\aarav\apex_decision_engine\web\frontend
+cd <your_project_path>\web\frontend
 npm run dev
 ```
 
@@ -39,7 +39,7 @@ http://localhost:3000
 If you haven't run the project before:
 
 ```powershell
-cd C:\Users\aarav\apex_decision_engine
+cd <your_project_path>
 
 # Create venv and install Python deps
 python -m venv venv
