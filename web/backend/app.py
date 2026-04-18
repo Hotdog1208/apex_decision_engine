@@ -304,6 +304,23 @@ async def get_signals() -> Dict[str, Any]:
     }
 
 
+@app.get("/chart/{symbol}")
+async def get_chart_data(symbol: str, period: str = "3mo", interval: str = "1d") -> Dict[str, Any]:
+    """Compatibility endpoint for chart data."""
+    try:
+        sym = validate_symbol(symbol)
+        data = connector.market_data.fetch_historical_data(sym, period, interval)
+        return {
+            "symbol": sym,
+            "period": period,
+            "interval": interval,
+            "data": data.to_dict(orient="records") if hasattr(data, "to_dict") else []
+        }
+    except Exception as e:
+        logger.error(f"Chart data failed for {symbol}: {e}")
+        return {"symbol": symbol, "data": [], "error": str(e)}
+
+
 # --- MVP signal helpers ---
 import random as _random
 import hashlib as _hashlib
