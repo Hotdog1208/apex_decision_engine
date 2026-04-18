@@ -153,6 +153,11 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
 
 
 # --- Routes ---
+@app.get("/")
+async def root() -> Dict[str, str]:
+    """Root endpoint. Returns API status."""
+    return {"status": "ok", "message": "Apex Decision Engine API is running.", "docs": "/docs"}
+
 @app.get("/portfolio")
 async def get_portfolio(user: str = Depends(get_current_user)) -> Dict[str, Any]:
     """Current portfolio state. Never 500."""
