@@ -117,6 +117,12 @@ export const api = {
   exportTrades: () => API_BASE + '/export/trades',
   login: (email, password) => postApi('/auth/login', { email, password }),
   signup: (email, password) => postApi('/auth/signup', { email, password }),
+  // MVP signal endpoints
+  getSignal: (symbol) => fetchApi('/signals/' + encodeURIComponent(symbol)),
+  getMvpSignals: () => fetchApi('/signals/batch/mvp'),
+  // Retention tracking
+  logEvent: (userId, symbol, action) => postApi('/events', { user_id: userId, symbol, action }),
+  getEvents: () => fetchApi('/admin/events'),
 }
 
 export function useWebSocket(onMessage) {

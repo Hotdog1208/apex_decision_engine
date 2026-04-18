@@ -30,3 +30,7 @@ Thumbs.db
 
 # Artifacts/logs
 *.txt
+pyright_check*.txt
+flake8_errors.txt
+mypy_errors.txt
+test_out.txt

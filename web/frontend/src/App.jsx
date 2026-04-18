@@ -4,21 +4,8 @@ import { ThemeProvider, useTheme } from './context/ThemeContext'
 import { Suspense, lazy } from 'react'
 
 const Dashboard = lazy(() => import('./components/Dashboard'))
-const LiveTrading = lazy(() => import('./pages/LiveTrading'))
-const Analytics = lazy(() => import('./pages/Analytics'))
-const Strategies = lazy(() => import('./pages/Strategies'))
-const Settings = lazy(() => import('./pages/Settings'))
-const Chat = lazy(() => import('./pages/Chat'))
 const Landing = lazy(() => import('./pages/Landing'))
-const Alerts = lazy(() => import('./pages/Alerts'))
-const News = lazy(() => import('./pages/News'))
-const Calendar = lazy(() => import('./pages/Calendar'))
 const Charts = lazy(() => import('./pages/Charts'))
-const Screener = lazy(() => import('./pages/Screener'))
-const Heatmap = lazy(() => import('./pages/Heatmap'))
-const Watchlists = lazy(() => import('./pages/Watchlists'))
-const PriceAlerts = lazy(() => import('./pages/PriceAlerts'))
-const RiskTools = lazy(() => import('./pages/RiskTools'))
 const Login = lazy(() => import('./pages/Login'))
 const Signup = lazy(() => import('./pages/Signup'))
 const Privacy = lazy(() => import('./pages/Privacy'))
@@ -27,13 +14,30 @@ const RiskDisclosure = lazy(() => import('./pages/RiskDisclosure'))
 const Glossary = lazy(() => import('./pages/Glossary'))
 const FAQ = lazy(() => import('./pages/FAQ'))
 const Disclaimer = lazy(() => import('./pages/Disclaimer'))
+const ComingSoon = lazy(() => import('./pages/ComingSoon'))
+
+// Hidden features — code preserved, routes guarded with ComingSoon
+const LiveTrading = lazy(() => import('./pages/LiveTrading'))
+const Analytics = lazy(() => import('./pages/Analytics'))
+const Strategies = lazy(() => import('./pages/Strategies'))
+const Settings = lazy(() => import('./pages/Settings'))
+const Chat = lazy(() => import('./pages/Chat'))
+const Alerts = lazy(() => import('./pages/Alerts'))
+const News = lazy(() => import('./pages/News'))
+const Calendar = lazy(() => import('./pages/Calendar'))
+const Screener = lazy(() => import('./pages/Screener'))
+const Heatmap = lazy(() => import('./pages/Heatmap'))
+const Watchlists = lazy(() => import('./pages/Watchlists'))
+const PriceAlerts = lazy(() => import('./pages/PriceAlerts'))
+const RiskTools = lazy(() => import('./pages/RiskTools'))
+
 import CommandPalette from './components/CommandPalette'
 import BackendStatus from './components/BackendStatus'
 import NoiseOverlay from './components/NoiseOverlay'
 import GlitchText from './components/GlitchText'
 import { AuthProvider, useAuth } from './context/AuthContext'
 import { Toaster, toast } from 'react-hot-toast'
-import { Sun, Moon, Command, ChevronDown, LayoutDashboard, Zap, MoreHorizontal, Bell, MessageCircle, Shield, Settings as SettingsIcon, LogOut, User } from 'lucide-react'
+import { Sun, Moon, Command, LayoutDashboard, BarChart2, ChevronDown, LogOut, User } from 'lucide-react'
 
 function ThemeToggle() {
   const { theme, setTheme } = useTheme()
@@ -49,38 +53,6 @@ function ThemeToggle() {
   )
 }
 
-// Single "More" menu: all secondary nav grouped in one dropdown (no cramped bar)
-const MORE_SECTIONS = [
-  {
-    title: 'Research',
-    links: [
-      { to: '/charts', label: 'Charts' },
-      { to: '/screener', label: 'Screener' },
-      { to: '/heatmap', label: 'Heatmap' },
-      { to: '/news', label: 'News' },
-      { to: '/calendar', label: 'Calendar' },
-      { to: '/watchlists', label: 'Watchlists' },
-    ],
-  },
-  {
-    title: 'Alerts',
-    links: [
-      { to: '/alerts', label: 'Alert Center' },
-      { to: '/price-alerts', label: 'Price Alerts' },
-    ],
-  },
-  {
-    title: 'Tools',
-    links: [
-      { to: '/risk-tools', label: 'Risk Tools' },
-      { to: '/chat', label: 'Chat' },
-      { to: '/strategies', label: 'Strategies' },
-      { to: '/analytics', label: 'Analytics' },
-      { to: '/settings', label: 'Settings' },
-    ],
-  },
-]
-
 const isMac = typeof navigator !== 'undefined' && /Mac|iPod|iPhone|iPad/.test(navigator.platform)
 const CMD_K_LABEL = isMac ? '⌘K' : 'Ctrl+K'
 
@@ -89,7 +61,6 @@ function AppNav() {
   const navigate = useNavigate()
   const { user, logout } = useAuth()
   const [commandOpen, setCommandOpen] = useState(false)
-  const [moreOpen, setMoreOpen] = useState(false)
   const [userMenuOpen, setUserMenuOpen] = useState(false)
 
   useEffect(() => {
@@ -99,7 +70,6 @@ function AppNav() {
         setCommandOpen((o) => !o)
       }
       if (e.key === 'Escape') {
-        setMoreOpen(false)
         setUserMenuOpen(false)
       }
     }
@@ -109,7 +79,6 @@ function AppNav() {
 
   useEffect(() => {
     const close = (e) => {
-      if (!e.target.closest('[data-nav-dropdown]')) setMoreOpen(false)
       if (!e.target.closest('[data-user-menu]')) setUserMenuOpen(false)
     }
     document.addEventListener('click', close)
@@ -117,8 +86,6 @@ function AppNav() {
   }, [])
 
   if (location.pathname === '/' || location.pathname === '/login' || location.pathname === '/signup') return null
-
-  const hasActiveInMore = MORE_SECTIONS.some((s) => s.links.some((l) => location.pathname === l.to))
 
   return (
     <>
@@ -140,49 +107,12 @@ function AppNav() {
 
               <NavLink to="/dashboard" className={`px-3 py-2 border rounded transition-all flex items-center gap-2 text-xs uppercase tracking-widest font-bold ${location.pathname === '/dashboard' ? 'text-black bg-apex-accent border-apex-accent shadow-[0_0_15px_var(--accent-primary-muted)]' : 'text-white/60 border-white/5 hover:border-apex-accent/50 hover:text-apex-accent'}`}>
                 <LayoutDashboard size={14} className={location.pathname === '/dashboard' ? 'animate-pulse' : ''} />
-                Dash
+                Signals
               </NavLink>
 
-              <NavLink to="/trading" className={`px-3 py-2 border rounded transition-all flex items-center gap-2 text-xs uppercase tracking-widest font-bold ${location.pathname === '/trading' ? 'text-black bg-apex-pink border-apex-pink shadow-[0_0_15px_var(--accent-pink-muted)]' : 'text-white/60 border-white/5 hover:border-apex-pink/50 hover:text-apex-pink'}`}>
-                <Zap size={14} className={location.pathname === '/trading' ? 'animate-pulse' : ''} />
-                Live
-              </NavLink>
-
-              <div className="relative" data-nav-dropdown>
-                <button
-                  type="button"
-                  onClick={() => setMoreOpen((o) => !o)}
-                  className={`flex items-center gap-1.5 px-3 py-2 border rounded text-xs uppercase tracking-widest font-bold transition-all ${hasActiveInMore ? 'text-apex-cyan border-apex-cyan/50 shadow-[0_0_10px_var(--accent-cyan-muted)]' : 'text-white/60 border-white/5 hover:border-apex-cyan/50 hover:text-apex-cyan'}`}
-                >
-                  <MoreHorizontal size={14} />
-                  Modules
-                  <ChevronDown size={14} className={`transition-transform duration-300 ${moreOpen ? 'rotate-180 text-apex-cyan' : ''}`} />
-                </button>
-                {moreOpen && (
-                  <div className="absolute top-[calc(100%+8px)] right-0 w-[400px] py-4 px-3 border border-apex-cyan/50 bg-apex-dark/95 backdrop-blur-xl shadow-[0_10px_50px_rgba(0,240,255,0.15)] z-50 grid grid-cols-3 gap-x-4 gap-y-6 before:absolute before:inset-0 before:bg-[url('data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHdpZHRoPSc0JyBoZWlnaHQ9JzQnPjxyZWN0IHdpZHRoPSc0JyBoZWlnaHQ9JzQnIGZpbGw9JyNmZmYnIGZpbGwtb3BhY2l0eT0nMC4wNScvPjwvc3ZnPg==')] before:pointer-events-none">
-                    {MORE_SECTIONS.map((section) => (
-                      <div key={section.title} className="relative z-10">
-                        <p className="text-apex-cyan/70 text-[10px] font-data uppercase tracking-[0.2em] mb-3 border-b border-apex-cyan/20 pb-1">{section.title}</p>
-                        <div className="space-y-1">
-                          {section.links.map((l) => (
-                            <button
-                              key={l.to}
-                              type="button"
-                              onClick={() => { navigate(l.to); setMoreOpen(false) }}
-                              className={`w-full text-left px-3 py-2 text-xs font-data uppercase tracking-wider transition-all border-l-2 ${location.pathname === l.to ? 'text-apex-cyan border-apex-cyan bg-apex-cyan/10' : 'text-white/60 border-transparent hover:border-apex-cyan/50 hover:bg-white/5 hover:text-white'}`}
-                            >
-                              {l.label}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-              <NavLink to="/settings" className={({ isActive }) => `hidden sm:flex items-center gap-1.5 px-3 py-2 border rounded text-xs uppercase tracking-widest font-bold transition-all ${isActive ? 'text-white border-white/50 shadow-[0_0_10px_rgba(255,255,255,0.2)]' : 'text-white/50 border-white/5 hover:border-white/30 hover:text-white'}`}>
-                <SettingsIcon size={14} />
-                CFG
+              <NavLink to="/charts" className={`px-3 py-2 border rounded transition-all flex items-center gap-2 text-xs uppercase tracking-widest font-bold ${location.pathname === '/charts' ? 'text-black bg-apex-cyan border-apex-cyan shadow-[0_0_15px_var(--accent-cyan-muted)]' : 'text-white/60 border-white/5 hover:border-apex-cyan/50 hover:text-apex-cyan'}`}>
+                <BarChart2 size={14} className={location.pathname === '/charts' ? 'animate-pulse' : ''} />
+                Charts
               </NavLink>
 
               <div className="w-[1px] h-8 bg-white/10 mx-2" />
@@ -209,10 +139,6 @@ function AppNav() {
                           <p className="text-apex-accent/50 text-[10px] font-data uppercase tracking-[0.2em] mb-1">Authenticated</p>
                           <p className="text-white font-data text-xs truncate relative z-10">{user.email}</p>
                         </div>
-                        <NavLink to="/settings" onClick={() => setUserMenuOpen(false)} className="flex items-center gap-2 px-4 py-3 text-xs uppercase tracking-widest text-white/60 hover:text-apex-accent hover:bg-apex-accent/10 border-l-[3px] border-transparent hover:border-apex-accent transition-all">
-                          <SettingsIcon size={12} />
-                          System CFG
-                        </NavLink>
                         <button type="button" onClick={() => { logout(); setUserMenuOpen(false); navigate('/') }} className="flex items-center gap-2 w-full px-4 py-3 text-xs uppercase tracking-widest text-apex-loss/70 hover:text-apex-loss hover:bg-apex-loss/10 border-l-[3px] border-transparent hover:border-apex-loss transition-all text-left">
                           <LogOut size={12} />
                           Terminate
@@ -271,30 +197,38 @@ function App() {
             <main className="max-w-[1400px] mx-auto px-4 py-8">
               <Suspense fallback={<div className="p-20 text-center text-apex-cyan animate-pulse font-data">Loading Route Chunk...</div>}>
                 <Routes>
+                  {/* MVP visible routes */}
                   <Route path="/" element={<Landing />} />
                   <Route path="/login" element={<Login />} />
                   <Route path="/signup" element={<Signup />} />
                   <Route path="/dashboard" element={<Dashboard />} />
-                  <Route path="/chat" element={<Chat />} />
-                  <Route path="/trading" element={<LiveTrading />} />
-                  <Route path="/alerts" element={<Alerts />} />
-                  <Route path="/news" element={<News />} />
-                  <Route path="/calendar" element={<Calendar />} />
                   <Route path="/charts" element={<Charts />} />
-                  <Route path="/screener" element={<Screener />} />
-                  <Route path="/heatmap" element={<Heatmap />} />
-                  <Route path="/watchlists" element={<Watchlists />} />
-                  <Route path="/price-alerts" element={<PriceAlerts />} />
-                  <Route path="/risk-tools" element={<RiskTools />} />
-                  <Route path="/strategies" element={<Strategies />} />
-                  <Route path="/analytics" element={<Analytics />} />
-                  <Route path="/settings" element={<Settings />} />
+
+                  {/* Hidden features — show ComingSoon placeholder */}
+                  <Route path="/trading" element={<ComingSoon />} />
+                  <Route path="/chat" element={<ComingSoon />} />
+                  <Route path="/alerts" element={<ComingSoon />} />
+                  <Route path="/news" element={<ComingSoon />} />
+                  <Route path="/calendar" element={<ComingSoon />} />
+                  <Route path="/screener" element={<ComingSoon />} />
+                  <Route path="/heatmap" element={<ComingSoon />} />
+                  <Route path="/watchlists" element={<ComingSoon />} />
+                  <Route path="/price-alerts" element={<ComingSoon />} />
+                  <Route path="/risk-tools" element={<ComingSoon />} />
+                  <Route path="/strategies" element={<ComingSoon />} />
+                  <Route path="/analytics" element={<ComingSoon />} />
+                  <Route path="/settings" element={<ComingSoon />} />
+
+                  {/* Legal / info pages stay visible */}
                   <Route path="/privacy" element={<Privacy />} />
                   <Route path="/terms" element={<Terms />} />
                   <Route path="/risk-disclosure" element={<RiskDisclosure />} />
                   <Route path="/glossary" element={<Glossary />} />
                   <Route path="/faq" element={<FAQ />} />
                   <Route path="/disclaimer" element={<Disclaimer />} />
+
+                  {/* Catch-all */}
+                  <Route path="*" element={<ComingSoon />} />
                 </Routes>
               </Suspense>
             </main>

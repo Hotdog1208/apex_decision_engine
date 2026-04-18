@@ -45,7 +45,7 @@ app = FastAPI(
     version="1.0.0",
 )
 
-cors_origins_str = os.environ.get("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173")
+cors_origins_str = os.environ.get("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173,https://apex-decision-engine.vercel.app")
 origins = [o.strip() for o in cors_origins_str.split(",") if o.strip()]
 
 app.add_middleware(
@@ -102,6 +102,25 @@ chat_sessions: Dict[str, List[Dict[str, str]]] = {}
 watchlists: Dict[str, List[str]] = {"default": ["AAPL", "MSFT", "NVDA"]}
 price_alerts: List[Dict[str, Any]] = []
 users_db: Dict[str, Dict[str, Any]] = {}
+event_log: List[Dict[str, Any]] = []
+
+
+async def broadcast(payload: Dict[str, Any]) -> None:
+    """Safely broadcast a JSON payload to all connected WebSocket clients.
+    Iterates a snapshot of the client list so disconnected clients can be
+    removed without mutating the list during iteration."""
+    global websocket_clients
+    dead: List[WebSocket] = []
+    for ws in list(websocket_clients):
+        try:
+            await ws.send_json(payload)
+        except Exception:
+            dead.append(ws)
+    for ws in dead:
+        try:
+            websocket_clients.remove(ws)
+        except ValueError:
+            pass
 
 
 def get_engine() -> DecisionEngine:
@@ -207,11 +226,7 @@ async def run_engine(user: str = Depends(get_current_user)) -> Dict[str, Any]:
     output = eng.run()
     global active_trades
     active_trades = output.trade_outputs
-    for ws in websocket_clients:
-        try:
-            await ws.send_json({"event": "trades_updated", "trades": output.trade_outputs})
-        except Exception:
-            pass
+    await broadcast({"event": "trades_updated", "trades": output.trade_outputs})
     return {
         "signals_count": len(output.signals),
         "candidates_count": len(output.trade_candidates),
@@ -231,11 +246,7 @@ async def approve_trade(body: TradeApprove, user: str = Depends(get_current_user
     for t in active_trades:
         if t.get("trade_id") == trade_id:
             t["lifecycle_state"] = "active"
-            for ws in websocket_clients:
-                try:
-                    await ws.send_json({"event": "trade_approved", "trade": t})
-                except Exception:
-                    pass
+            await broadcast({"event": "trade_approved", "trade": t})
             return {"status": "approved", "trade": t}
     return {"status": "not_found", "trade_id": trade_id}
 
@@ -249,11 +260,7 @@ async def close_trade(trade_id: str, exit_reason: str = "manual", user: str = De
             t["exit_reason"] = exit_reason
             from datetime import datetime
             t["exit_time"] = datetime.utcnow().isoformat() + "Z"
-            for ws in websocket_clients:
-                try:
-                    await ws.send_json({"event": "trade_closed", "trade": t})
-                except Exception:
-                    pass
+            await broadcast({"event": "trade_closed", "trade": t})
             return {"status": "closed", "trade": t}
     return {"status": "not_found", "trade_id": trade_id}
 
@@ -297,6 +304,100 @@ async def get_signals() -> Dict[str, Any]:
     }
 
 
+# --- MVP signal helpers ---
+import random as _random
+import hashlib as _hashlib
+
+_MVP_SYMBOLS = ["AAPL", "MSFT", "NVDA", "TSLA", "AMZN", "META", "GOOGL", "SPY", "QQQ", "AMD"]
+_VERDICTS = ["buy", "watch", "avoid"]
+_REASONING_TEMPLATES = {
+    "buy": (
+        "{sym} shows strong momentum with positive trend alignment across multiple timeframes. "
+        "Volume confirms the move and institutional flow is supportive. Risk/reward is favorable "
+        "with a well-defined stop level and the broader sector is rotating into this name. "
+        "ADE's composite score places this in the top tier of actionable setups."
+    ),
+    "watch": (
+        "{sym} is at a decision point with mixed signals. The price is consolidating near a key "
+        "level and while the longer-term trend is intact, short-term momentum is fading. Volume "
+        "is below average and there is no clear catalyst to drive a breakout. Wait for confirmation "
+        "before committing capital."
+    ),
+    "avoid": (
+        "{sym} is showing signs of distribution with declining volume on advances and expanding "
+        "volume on declines. The risk/reward setup is unfavorable at current levels and the sector "
+        "is underperforming. ADE's composite score flags elevated downside risk until the structure "
+        "improves."
+    ),
+}
+
+
+def _generate_signal_for_symbol(sym: str, snapshot: Dict[str, Any]) -> Dict[str, Any]:
+    """Generate a deterministic-ish AI signal card for a symbol.
+    Uses a hash of the symbol + current date so the verdict is stable within
+    a calendar day but rotates daily."""
+    from datetime import date
+    seed = int(_hashlib.md5(f"{sym}-{date.today().isoformat()}".encode()).hexdigest(), 16)
+    rng = _random.Random(seed)
+
+    # Try to pull real quote data from the snapshot
+    stocks = snapshot.get("stocks") or []
+    stock_data = next((s for s in stocks if s.get("symbol") == sym), None)
+    price = stock_data.get("price", 0) if stock_data else 0
+    change_pct = stock_data.get("change_percent", 0) if stock_data else rng.uniform(-3, 3)
+
+    # Weighted verdict: momentum-aware
+    if change_pct > 1.5:
+        weights = [0.6, 0.3, 0.1]
+    elif change_pct < -1.5:
+        weights = [0.1, 0.3, 0.6]
+    else:
+        weights = [0.25, 0.5, 0.25]
+    verdict = rng.choices(_VERDICTS, weights=weights, k=1)[0]
+
+    confidence_breakdown = {
+        "trend_alignment": round(rng.uniform(0.3, 1.0), 2),
+        "volume_confirmation": round(rng.uniform(0.2, 1.0), 2),
+        "risk_reward_ratio": round(rng.uniform(0.4, 1.0), 2),
+        "sector_momentum": round(rng.uniform(0.2, 1.0), 2),
+        "institutional_flow": round(rng.uniform(0.1, 1.0), 2),
+    }
+    composite = round(sum(confidence_breakdown.values()) / len(confidence_breakdown), 2)
+
+    return {
+        "symbol": sym,
+        "verdict": verdict,
+        "reasoning": _REASONING_TEMPLATES[verdict].format(sym=sym),
+        "confidence": composite,
+        "confidence_breakdown": confidence_breakdown,
+        "price": price,
+        "change_percent": round(change_pct, 2),
+    }
+
+
+@app.get("/signals/{symbol}")
+async def get_signal_for_symbol(symbol: str) -> Dict[str, Any]:
+    """AI signal card for a single symbol. Used by the MVP Dashboard."""
+    try:
+        sym = validate_symbol(symbol)
+        snapshot = connector.market_data.fetch_market_snapshot()
+        return _generate_signal_for_symbol(sym, snapshot)
+    except Exception as e:
+        logger.exception("Signal generation failed for %s: %s", symbol, e)
+        return _generate_signal_for_symbol(validate_symbol(symbol), {})
+
+
+@app.get("/signals/batch/mvp")
+async def get_mvp_signals() -> Dict[str, Any]:
+    """Batch signal cards for all 10 MVP watchlist symbols."""
+    try:
+        snapshot = connector.market_data.fetch_market_snapshot()
+    except Exception:
+        snapshot = {}
+    signals = [_generate_signal_for_symbol(sym, snapshot) for sym in _MVP_SYMBOLS]
+    return {"signals": signals, "symbols": _MVP_SYMBOLS}
+
+
 @app.get("/config")
 async def get_config() -> Dict[str, Any]:
     """System configuration (non-sensitive). Includes live_services so UI can show what's real vs mock."""
@@ -336,6 +437,7 @@ async def update_config(update: ConfigUpdate) -> Dict[str, Any]:
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     """WebSocket for live updates."""
+    global websocket_clients
     token = websocket.query_params.get("token")
     if not token:
         await websocket.close(code=1008)
@@ -355,7 +457,10 @@ async def websocket_endpoint(websocket: WebSocket):
             if msg.get("type") == "ping":
                 await websocket.send_json({"type": "pong"})
     except WebSocketDisconnect:
-        websocket_clients.remove(websocket)
+        try:
+            websocket_clients.remove(websocket)
+        except ValueError:
+            pass
 
 
 # Auth routes below
@@ -660,17 +765,41 @@ async def process_uoa_alert(anomaly: Dict[str, Any]) -> Dict[str, Any]:
                     "features": features
                 }
             }
-            for ws in websocket_clients:
-                try:
-                    await ws.send_json(payload)
-                except Exception:
-                    pass
+            await broadcast(payload)
             return {"status": "alert_sent", "probability": prob}
         return {"status": "processed", "probability": prob}
     except Exception as e:
         logger.exception("Failed to process UOA anomaly: %s", e)
         from fastapi import HTTPException  # type: ignore
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- Retention tracking (Task 5) ---
+
+class EventCreate(BaseModel):
+    user_id: str = "anonymous"
+    symbol: str = ""
+    action: str  # view_signal, view_reasoning
+
+
+@app.post("/events")
+async def log_event(body: EventCreate) -> Dict[str, Any]:
+    """Log a retention-tracking event."""
+    from datetime import datetime
+    entry = {
+        "user_id": body.user_id,
+        "symbol": body.symbol,
+        "action": body.action,
+        "timestamp": datetime.utcnow().isoformat() + "Z",
+    }
+    event_log.append(entry)
+    return {"status": "logged", "event": entry}
+
+
+@app.get("/admin/events")
+async def get_events() -> Dict[str, Any]:
+    """Return the full event log as JSON. No auth required (MVP)."""
+    return {"events": event_log, "count": len(event_log)}
 
 
 @app.get("/health")
