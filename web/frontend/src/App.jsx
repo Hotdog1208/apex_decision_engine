@@ -96,8 +96,8 @@ function AppNav() {
 
             {/* Logo */}
             <NavLink to="/dashboard" className="group text-2xl font-display font-black tracking-tight shrink-0 flex items-center relative overflow-hidden">
-              <span className="absolute inset-0 bg-apex-accent text-black flex items-center translate-y-full group-hover:translate-y-0 transition-transform duration-300 font-black px-2 z-10">APEX // MVP</span>
-              <GlitchText text="APEX // MVP" className="text-apex-accent px-2" />
+              <span className="absolute inset-0 bg-apex-accent text-black flex items-center translate-y-full group-hover:translate-y-0 transition-transform duration-300 font-black px-2 z-10">APEX ENGINE</span>
+              <GlitchText text="APEX" className="text-apex-accent px-2" />
             </NavLink>
 
             <div className="flex items-center gap-2 shrink-0">

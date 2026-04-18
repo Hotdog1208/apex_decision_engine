@@ -45,7 +45,7 @@ app = FastAPI(
     version="1.0.0",
 )
 
-cors_origins_str = os.environ.get("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173,https://apex-decision-engine.vercel.app")
+cors_origins_str = os.environ.get("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173,https://apex-decision-engine.vercel.app,https://*.vercel.app")
 origins = [o.strip() for o in cors_origins_str.split(",") if o.strip()]
 
 app.add_middleware(
