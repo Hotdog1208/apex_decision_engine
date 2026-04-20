@@ -22,6 +22,8 @@ export default function Chat() {
   const [loading, setLoading] = useState(false)
   const [sessionId] = useState(() => 'sess_' + Math.random().toString(36).slice(2, 9))
   const bottomRef = useRef(null)
+  const location = useLocation()
+  const initialData = location.state
 
   useEffect(() => {
     api.getChatHistory(sessionId).then((r) => setMessages(r.messages || [])).catch(() => setMessages([]))
@@ -31,14 +33,20 @@ export default function Chat() {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, loading])
 
-  const send = async (text) => {
+  useEffect(() => {
+    if (initialData?.symbol && messages.length === 0 && !loading) {
+        send(`Explain the current signal for ${initialData.symbol} and suggest a trade structure.`, initialData.signal)
+    }
+  }, [initialData])
+
+  const send = async (text, signalCtx = null) => {
     const trimmed = (text || input).trim()
     if (!trimmed || loading) return
     setInput('')
     setMessages((prev) => [...prev, { role: 'user', content: trimmed }])
     setLoading(true)
     try {
-      const res = await api.chat(sessionId, trimmed)
+      const res = await api.chat(sessionId, trimmed, signalCtx)
       const reply = res?.reply ?? res?.content ?? ''
       setMessages((prev) => [...prev, { role: 'assistant', content: reply || 'No response.' }])
     } catch (e) {

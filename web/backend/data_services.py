@@ -2,7 +2,7 @@
 
 import os
 from datetime import datetime, timedelta
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 FINNHUB_BASE = "https://finnhub.io/api/v1"
 
@@ -210,8 +210,32 @@ def get_calendar() -> List[Dict[str, Any]]:
         return out if out else get_mock_calendar()
     except Exception as e:
         import logging
-        logging.getLogger(__name__).warning("Finnhub calendar failed: %s", e)
         return get_mock_calendar()
+
+
+def get_earnings_calendar(symbol: str) -> Optional[str]:
+    """Check for earnings date within 30 days for a symbol. Returns YYYY-MM-DD or None."""
+    api_key = (os.environ.get("FINNHUB_API_KEY") or "").strip()
+    if not api_key:
+        return None  # Or mock
+    try:
+        import requests
+        today = datetime.utcnow().date()
+        from_str = (today - timedelta(days=1)).isoformat()
+        to_str = (today + timedelta(days=30)).isoformat()
+        r = requests.get(
+            f"{FINNHUB_BASE}/calendar/earnings",
+            params={"from": from_str, "to": to_str, "symbol": symbol, "token": api_key},
+            timeout=10,
+        )
+        r.raise_for_status()
+        data = r.json()
+        earnings = data.get("earningsCalendar", [])
+        if earnings:
+            return earnings[0].get("date")
+        return None
+    except Exception:
+        return None
 
 
 def get_screener_results(filters: Dict[str, Any], snapshot: Dict[str, Any]) -> List[Dict[str, Any]]:

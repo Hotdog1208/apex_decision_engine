@@ -123,6 +123,11 @@ export const api = {
   // Retention tracking
   logEvent: (userId, symbol, action) => postApi('/events', { user_id: userId, symbol, action }),
   getEvents: () => fetchApi('/admin/events'),
+  // New Task 3, 4, 5 endpoints
+  getMarketRegime: () => fetchApi('/market-regime'),
+  recordSignalOutcome: (signalId, outcome) => postApi('/signals/outcome', { signal_id: signalId, outcome }),
+  getSignalPerformance: () => fetchApi('/signals/performance'),
+  regenerateSignal: (symbol) => fetchApi('/signals/' + encodeURIComponent(symbol)),
 }
 
 export function useWebSocket(onMessage) {

@@ -1,13 +1,13 @@
 """
 AI Trading Chatbot for Apex Decision Engine.
-Uses Google Gemini API with RAG (Retrieval-Augmented Generation) pipeline.
+Uses Anthropic Claude API with RAG (Retrieval-Augmented Generation) pipeline.
 """
 
 import json
 import os
 import logging
-from typing import Any, Callable, Dict, List
-from google import genai  # type: ignore
+from typing import Any, Callable, Dict, List, Optional
+import anthropic  # type: ignore
 from engine.ml_models.uoa_xgboost import UOAModelPipeline  # type: ignore
 
 logger = logging.getLogger(__name__)
@@ -39,11 +39,9 @@ def extract_ticker(message: str) -> str:
     known = ("AAPL", "MSFT", "NVDA", "JPM", "XOM", "GOOGL", "META", "TSLA", "AMZN", "SPY")
     for w in message.upper().replace('?','').replace('.','').replace(',','').split():
         if w in known or (len(w) <= 4 and w.isalpha()):
-            # We just return the first uppercase looking ticker, favoring known if possible
             if w in known:
                 return w
     
-    # Fallback to TSLA or whatever is in the message
     for w in message.upper().split():
         if len(w) <= 4 and w.isalpha():
             return w
@@ -54,17 +52,16 @@ def build_rag_context(user_message: str, connector: Any) -> str:
     ticker = extract_ticker(user_message)
     context_blocks = []
     
-    # 1. Read UOA Anomalies
     uoa_file = connector.data_dir / "uoa_anomalies.json"
     anomalies = []
     try:
         if uoa_file.exists() and uoa_file.stat().st_size > 0:
             with open(uoa_file, "r") as f:
-                data: List[Dict[str, Any]] = json.load(f)  # type: ignore
+                data: List[Dict[str, Any]] = json.load(f)
                 if ticker:
                     anomalies = [a for a in data if a.get("ticker") == ticker]
                 if not anomalies and data:
-                    anomalies = list(data)[-5:]  # Get the last 5 if no ticker match  # type: ignore
+                    anomalies = list(data)[-5:]
     except Exception as e:
         logger.error(f"Failed to load UOA data: {e}")
             
@@ -72,20 +69,17 @@ def build_rag_context(user_message: str, connector: Any) -> str:
         context_blocks.append("No recent UOA anomalies found in the local database.")
     else:
         context_blocks.append("Recent UOA Anomalies:")
-        for a in anomalies[-3:]:  # type: ignore
+        for a in anomalies[-3:]:
             context_blocks.append(json.dumps(a))
             
-    # 2. ML Probability Score
     if anomalies:
         try:
             ml_pipeline = UOAModelPipeline(data_source=os.environ.get("DATA_SOURCE", "mock"))
             ml_pipeline.load_model()
             
-            # Predict the most recent anomaly
             latest_anomaly = anomalies[-1]
             target_ticker = latest_anomaly.get("ticker", ticker)
             
-            # We need recent history to engineer features
             hist = connector.market_data.fetch_ohlc(target_ticker, period="3mo", interval="1d")
             series = hist.get("series", [])
             
@@ -98,7 +92,6 @@ def build_rag_context(user_message: str, connector: Any) -> str:
             logger.error(f"Failed to run ML prediction: {e}")
             context_blocks.append("ML Pipeline temporarily unavailable.")
             
-    # 3. Live Market Data
     if ticker:
         try:
             quote = connector.market_data.fetch_quote(ticker)
@@ -106,76 +99,53 @@ def build_rag_context(user_message: str, connector: Any) -> str:
         except Exception as e:
             logger.error(f"Failed to fetch market data: {e}")
             
-    full_context = "\\n".join(context_blocks)
+    full_context = "\n".join(context_blocks)
     return full_context
 
 def _demo_reply(user_message: str, get_engine: Callable, connector: Any) -> str:
-    """Smart demo responses when Gemini is not configured."""
+    """Smart demo responses when Claude is not configured."""
     msg = (user_message or "").lower().strip()
-    return "I am the ADE Institutional Risk Manager. Please set the GEMINI_API_KEY in the .env file to enable the RAG Chatbot."
+    return "I am the ADE Institutional Risk Manager. Please set the ANTHROPIC_API_KEY in the .env file to enable the RAG Chatbot."
 
-async def chat_completion(
-    messages: List[Dict[str, str]],
-    get_engine: Callable,
-    connector: Any,
+async def chat(
+    session_id: str,
+    message: str,
+    signal_context: Optional[Dict[str, Any]] = None,
 ) -> str:
-    """Call Google Gemini API with RAG context."""
-    uoa_file = connector.data_dir / "uoa_anomalies.json"
-    has_valid_data = False
-    try:
-        if uoa_file.exists() and uoa_file.stat().st_size > 0:
-            with open(uoa_file, "r") as f:
-                if json.load(f):
-                    has_valid_data = True
-    except Exception:
-        pass
-        
-    if not has_valid_data:
-        return "System is actively scanning E-Trade Sandbox for unusual options activity. No anomalies detected yet."
+    """Entry point for AI chat, supports signal context forwarding."""
+    # Note: In a real app, we'd load session history from a DB. 
+    # For this MVP upgrade, we'll focus on the RAG and context integration.
+    
+    # Importing dependencies locally to avoid circular imports / late binding
+    from web.backend.app import connector, get_engine 
 
-    api_key = os.environ.get("GEMINI_API_KEY", "").strip()
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
     if not api_key:
-        last_msg = (messages[-1].get("content", "") or "").strip() if messages else ""
-        return _demo_reply(last_msg, get_engine, connector)
+        return _demo_reply(message, get_engine, connector)
 
     try:
-        client = genai.Client(api_key=api_key)  # type: ignore
-        model_name = os.environ.get("GEMINI_CHAT_MODEL", "gemini-1.5-pro")
-    except Exception as e:
-        return f"[Error configuring Gemini API: {e}]"
-
-    # Extract user message
-    user_message = next((m.get("content", "") for m in reversed(messages) if m.get("role") == "user"), "")
-    
-    # Build RAG Context
-    rag_context = build_rag_context(user_message, connector)
-    
-    # Inject context into system prompt instruction
-    system_instruction = CHAT_SYSTEM_PROMPT + "\\n\\n--- CURRENT RAG CONTEXT DATA ---\\n" + rag_context
-    
-    # Format messages for Gemini
-    # Gemini uses 'user' and 'model' as roles. And 'developer' or 'system' logic is often passed as a system instruction (available in v1.5 API) or prepended.
-    # We will prepend it to the user's context for max compatibility.
-    
-    # If the model strongly supports system_instruction, we could pass it in GenerativeModel, but prepending to the first user prompt is robust.
-    gemini_messages = []
-    
-    # Start with the system prompt injected into the FIRST user message
-    first_user_found = False
-    
-    for msg in messages:
-        role = "user" if msg.get("role") == "user" else "model"
-        content = msg.get("content", "")
+        client = anthropic.Anthropic(api_key=api_key)
+        model_name = os.environ.get("ANTHROPIC_MODEL", "claude-3-5-sonnet-20240620")
         
-        if role == "user" and not first_user_found:
-            content = f"SYSTEM INSTRUCTIONS:\\n{system_instruction}\\n\\nUSER QUERY:\\n{content}"
-            first_user_found = True
-            
-        gemini_messages.append({"role": role, "parts": [content]})
+        # Build RAG Context
+        rag_context = build_rag_context(message, connector)
+        
+        # Build System Prompt with optional Signal Context
+        system_prompt = CHAT_SYSTEM_PROMPT
+        if signal_context:
+            system_prompt += f"\n\n--- TARGET SIGNAL CONTEXT ---\n{json.dumps(signal_context, indent=2)}\n"
+            system_prompt += "\nThe user is asking about the specific signal above. Use the provided levels, rationales, and indicators in your analysis.\n"
 
-    try:
-        response = client.models.generate_content(model=model_name, contents=gemini_messages)
-        return response.text
+        # Create message with Anthropic
+        response = client.messages.create(
+            model=model_name,
+            max_tokens=1500,
+            system=system_prompt,
+            messages=[
+                {"role": "user", "content": f"{message}\n\n[Context: {rag_context}]"}
+            ]
+        )
+        return response.content[0].text
     except Exception as e:
-        logger.error(f"Gemini API Error: {e}")
-        return f"Error communicating with Gemini: {e}"
+        logger.exception(f"Claude chat error: {e}")
+        return f"Uplink unstable. Error: {str(e)}"

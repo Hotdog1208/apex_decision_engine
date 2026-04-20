@@ -6,7 +6,7 @@ REST API + WebSocket for live updates.
 import json
 import logging
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 # Load .env from project root so API keys and secrets are available
 from dotenv import load_dotenv  # type: ignore
@@ -34,7 +34,10 @@ from web.backend.data_services import (  # type: ignore
     get_calendar as fetch_calendar,
     get_screener_results,
     get_heatmap_data,
+    get_earnings_calendar,
 )
+from engine.core.indicators import calculate_indicators, detect_market_regime  # type: ignore
+import anthropic  # type: ignore
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -103,6 +106,7 @@ watchlists: Dict[str, List[str]] = {"default": ["AAPL", "MSFT", "NVDA"]}
 price_alerts: List[Dict[str, Any]] = []
 users_db: Dict[str, Dict[str, Any]] = {}
 event_log: List[Dict[str, Any]] = []
+signal_log: List[Dict[str, Any]] = []  # Task 4: Signal Performance Logging
 
 
 async def broadcast(payload: Dict[str, Any]) -> None:
@@ -141,8 +145,8 @@ async def startup():
         logger.info("Live market data: Yahoo Finance (charts, screener, heatmap, quotes)")
     if (os.environ.get("FINNHUB_API_KEY") or "").strip():
         logger.info("News & calendar: Finnhub enabled")
-    if (os.environ.get("GEMINI_API_KEY") or "").strip():
-        logger.info("Chat: Gemini enabled")
+    if (os.environ.get("ANTHROPIC_API_KEY") or "").strip():
+        logger.info("Chat: Claude enabled")
 
 
 # --- Auth components needed by endpoints ---
@@ -304,6 +308,59 @@ async def get_signals() -> Dict[str, Any]:
     }
 
 
+@app.get("/market-regime")
+async def get_market_regime() -> Dict[str, Any]:
+    """Get current market regime for navigation badge."""
+    return get_cached_regime(connector)
+
+
+class SignalOutcome(BaseModel):
+    signal_id: str
+    outcome: str  # WIN | LOSS | BREAKEVEN
+
+
+@app.post("/signals/outcome")
+async def record_signal_outcome(body: SignalOutcome, user: str = Depends(get_current_user)) -> Dict[str, Any]:
+    """Update a signal log entry with an outcome."""
+    for s in signal_log:
+        if s.get("signal_id") == body.signal_id:
+            s["outcome"] = body.outcome
+            s["outcome_recorded_at"] = datetime.utcnow().isoformat() + "Z"
+            return {"status": "ok", "signal": s}
+    raise HTTPException(status_code=404, detail="Signal ID not found")
+
+
+@app.get("/signals/performance")
+async def get_signal_performance() -> Dict[str, Any]:
+    """Calculate and return signal win rates and stats."""
+    total = len(signal_log)
+    outcomes = [s for s in signal_log if s.get("outcome")]
+    recorded = len(outcomes)
+    
+    wins = len([s for s in outcomes if s["outcome"] == "WIN"])
+    win_rate = (wins / recorded) if recorded > 0 else 0.0
+    
+    # By verdict
+    by_verdict = {}
+    for v in ["BUY", "WATCH", "AVOID"]:
+        v_outcomes = [s for s in outcomes if s["verdict"] == v]
+        v_total = len([s for s in signal_log if s["verdict"] == v])
+        v_recorded = len(v_outcomes)
+        v_wins = len([s for s in v_outcomes if s["outcome"] == "WIN"])
+        by_verdict[v] = {
+            "total": v_total,
+            "recorded": v_recorded,
+            "win_rate": (v_wins / v_recorded) if v_recorded > 0 else 0.0
+        }
+        
+    return {
+        "total_signals": total,
+        "outcomes_recorded": recorded,
+        "win_rate": win_rate,
+        "by_verdict": by_verdict
+    }
+
+
 @app.get("/chart/{symbol}")
 async def get_chart_data(symbol: str, period: str = "3mo", interval: str = "1d") -> Dict[str, Any]:
     """Compatibility endpoint for chart data."""
@@ -321,7 +378,176 @@ async def get_chart_data(symbol: str, period: str = "3mo", interval: str = "1d")
         return {"symbol": symbol, "data": [], "error": str(e)}
 
 
-# --- MVP signal helpers ---
+# --- Signal Engine with Claude ---
+import anthropic
+
+SIGNAL_SYSTEM_PROMPT = """You are a senior quantitative analyst and institutional risk manager for the Apex Decision Engine (ADE).
+Your task is to generate high-conviction, data-driven trading signals based on the technical and macro data provided.
+
+CRITICAL INSTRUCTIONS:
+1. NEVER use vague language (e.g., "looks bullish", "could go up", "potentially").
+2. EVERY claim must reference a specific data point or value provided in the context.
+3. Assign a confidence score (0-100) based on the sum of four pillars: Trend, Momentum, Volume, and Risk/Reward (each max 25).
+4. Identify a clear stop level (invalidation) and a logical price target with concise mathematical reasoning.
+5. If the verdict (e.g., BUY) conflicts with the current market regime (e.g., BEAR), set regime_conflict to true and explain it.
+6. Output MUST BE strictly valid JSON according to the schema provided.
+
+The signal must reason through:
+- Trend: Price vs MAs (20, 50, 200)
+- Momentum: RSI and MACD status
+- Volume: Relative volume vs 20-day average
+- Risk/Reward: ATR-based volatility and proximity to support/resistance levels
+- Macro: Market regime context (SPY status)
+"""
+
+_REGIME_CACHE: Dict[str, Any] = {"data": None, "timestamp": 0}
+
+def get_cached_regime(connector: Any) -> Dict[str, Any]:
+    """Calculate market regime once per hour (or cycle)."""
+    now = time.time()
+    if _REGIME_CACHE["data"] and now - _REGIME_CACHE["timestamp"] < 3600:
+        return _REGIME_CACHE["data"]
+    
+    try:
+        spy_hist = connector.market_data.fetch_ohlc("SPY", period="1y", interval="1d")
+        spy_series = spy_hist.get("series", [])
+        regime_data = detect_market_regime(spy_series)
+        _REGIME_CACHE["data"] = regime_data
+        _REGIME_CACHE["timestamp"] = now
+        return regime_data
+    except Exception as e:
+        logger.error(f"Regime detection failed: {e}")
+        return {"regime": "NEUTRAL", "spy_vs_200ma": 0, "spy_rsi": 50, "vix_level": "NORMAL", "regime_note": "Regime undetected"}
+
+async def _generate_claude_signal(sym: str, connector: Any) -> Dict[str, Any]:
+    """Generate a high-accuracy signal using Claude Sonnet."""
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    if not api_key:
+        # Fallback to current mock if no key
+        snapshot = connector.market_data.fetch_market_snapshot()
+        return _generate_signal_for_symbol(sym, snapshot)
+
+    try:
+        # 1. Gather Data
+        quote = connector.market_data.fetch_quote(sym)
+        hist = connector.market_data.fetch_ohlc(sym, period="6mo", interval="1d")
+        series = hist.get("series", [])
+        indicators = calculate_indicators(series)
+        regime = get_cached_regime(connector)
+        
+        # 2. Get earnings/news (Task 6)
+        from web.backend.data_services import get_news as fetch_news
+        news = [n for n in fetch_news() if sym in n.get("symbols", [])][:2]
+        headlines = [n.get("headline") for n in news]
+        
+        earnings_date = get_earnings_calendar(sym)
+        days_to_earnings = None
+        if earnings_date:
+            from datetime import date
+            ed = date.fromisoformat(earnings_date)
+            days_to_earnings = (ed - date.today()).days
+        
+        earnings_flag = days_to_earnings is not None and days_to_earnings <= 14
+        earnings_palty = days_to_earnings is not None and days_to_earnings <= 7
+        
+        # 3. Construct Context for Claude
+        context = {
+            "symbol": sym,
+            "current_price": quote.get("price"),
+            "indicators": indicators,
+            "market_regime": regime,
+            "news_headlines": headlines,
+            "earnings_calendar": {
+                "days_to_earnings": days_to_earnings,
+                "is_imminent": earnings_flag
+            }
+        }
+
+        client = anthropic.Anthropic(api_key=api_key)
+        model_name = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
+        
+        prompt = f"""Generate a trading signal for {sym} based on the following data:
+{json.dumps(context, indent=2)}
+
+Output the result in the following JSON format ONLY:
+{{
+  "verdict": "BUY | WATCH | AVOID",
+  "confidence_score": 0-100,
+  "confidence_breakdown": {{
+    "trend_alignment": 0-25,
+    "momentum_strength": 0-25,
+    "volume_confirmation": 0-25,
+    "risk_reward_ratio": 0-25
+  }},
+  "entry_zone": "string",
+  "stop_loss": "string with rationale",
+  "price_target": "string with rationale",
+  "target_timeframe": "string",
+  "thesis": "3-5 sentence paragraph referencing exact data",
+  "invalidation": "what price/event makes this wrong",
+  "regime_conflict": boolean,
+  "regime_note": "string if conflict, else null",
+  "data_inputs_used": ["list of fields"]
+}}"""
+
+        response = client.messages.create(
+            model=model_name,
+            max_tokens=2000,
+            system=SIGNAL_SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        
+        raw_reply = response.content[0].text
+        # Extract JSON (Claude sometimes wraps in markdown)
+        if "```json" in raw_reply:
+            raw_json = raw_reply.split("```json")[1].split("```")[0].strip()
+        elif "```" in raw_reply:
+            raw_json = raw_reply.split("```")[1].split("```")[0].strip()
+        else:
+            raw_json = raw_reply.strip()
+            
+        signal = json.loads(raw_json)
+        signal["symbol"] = sym
+        signal["price"] = quote.get("price")
+        signal["generated_at"] = datetime.utcnow().isoformat() + "Z"
+
+        # Apply Task 6 Earnings Penalty
+        if earnings_palty:
+            signal["confidence_score"] = max(0, signal.get("confidence_score", 0) - 15)
+            if "confidence_breakdown" not in signal:
+                signal["confidence_breakdown"] = {}
+            signal["confidence_breakdown"]["earnings_proximity_penalty"] = -15
+            logger.info(f"Earnings penalty applied to {sym}: -15")
+        
+        # Log to signal_log for performance tracking (Task 4)
+        import uuid
+        signal_entry = {
+            "signal_id": str(uuid.uuid4()),
+            "symbol": signal["symbol"],
+            "verdict": signal["verdict"],
+            "confidence_score": signal["confidence_score"],
+            "entry_zone": signal["entry_zone"],
+            "stop_loss": signal["stop_loss"],
+            "price_target": signal["price_target"],
+            "generated_at": signal["generated_at"],
+            "price_at_generation": signal["price"],
+            "outcome": None,
+            "outcome_recorded_at": None
+        }
+        signal_log.append(signal_entry)
+        signal["signal_id"] = signal_entry["signal_id"] # Pass ID to frontend
+        
+        logger.info(f"Signal generated for {sym}: {signal['verdict']} ({signal['confidence_score']})")
+        
+        return signal
+
+    except Exception as e:
+        logger.exception(f"Claude signal generation failed for {sym}: {e}")
+        snapshot = connector.market_data.fetch_market_snapshot()
+        return _generate_signal_for_symbol(sym, snapshot)
+
+
+# --- Existing MVP signal helpers (keep as fallback) ---
 import random as _random
 import hashlib as _hashlib
 
@@ -394,11 +620,10 @@ def _generate_signal_for_symbol(sym: str, snapshot: Dict[str, Any]) -> Dict[str,
 
 @app.get("/signals/{symbol}")
 async def get_signal_for_symbol(symbol: str) -> Dict[str, Any]:
-    """AI signal card for a single symbol. Used by the MVP Dashboard."""
+    """AI signal card for a single symbol. Uses Claude-powered engine."""
     try:
         sym = validate_symbol(symbol)
-        snapshot = connector.market_data.fetch_market_snapshot()
-        return _generate_signal_for_symbol(sym, snapshot)
+        return await _generate_claude_signal(sym, connector)
     except Exception as e:
         logger.exception("Signal generation failed for %s: %s", symbol, e)
         return _generate_signal_for_symbol(validate_symbol(symbol), {})
@@ -407,11 +632,9 @@ async def get_signal_for_symbol(symbol: str) -> Dict[str, Any]:
 @app.get("/signals/batch/mvp")
 async def get_mvp_signals() -> Dict[str, Any]:
     """Batch signal cards for all 10 MVP watchlist symbols."""
-    try:
-        snapshot = connector.market_data.fetch_market_snapshot()
-    except Exception:
-        snapshot = {}
-    signals = [_generate_signal_for_symbol(sym, snapshot) for sym in _MVP_SYMBOLS]
+    import asyncio
+    tasks = [_generate_claude_signal(sym, connector) for sym in _MVP_SYMBOLS]
+    signals = await asyncio.gather(*tasks)
     return {"signals": signals, "symbols": _MVP_SYMBOLS}
 
 
@@ -424,7 +647,7 @@ async def get_config() -> Dict[str, Any]:
         "live_services": {
             "market_data": cfg.data_source == "yahoo",
             "news_calendar": bool((os.environ.get("FINNHUB_API_KEY") or "").strip()),
-            "chat_ai": bool((os.environ.get("GEMINI_API_KEY") or "").strip()),
+            "chat_ai": bool((os.environ.get("ANTHROPIC_API_KEY") or "").strip()),
         },
         "scoring_weights": {
             "structure": cfg.scoring.structure_weight,
@@ -541,22 +764,19 @@ async def login(body: UserLogin) -> Dict[str, Any]:
 class ChatMessage(BaseModel):
     session_id: str = "default"
     message: str
+    signal_context: Optional[Dict[str, Any]] = None
 
 
 @app.post("/chat")
 async def chat(body: ChatMessage, user: str = Depends(get_current_user)) -> Dict[str, Any]:
-    """Send a message to the AI trading assistant. Returns assistant reply."""
-    session_id = body.session_id or "default"
-    if session_id not in chat_sessions:
-        chat_sessions[session_id] = []
-    # Basic injection sanitization
-    sanitized_msg = body.message.replace("ignore previous instructions", "")
-    sanitized_msg = sanitized_msg.replace("system prompt", "")
-    chat_sessions[session_id].append({"role": "user", "content": sanitized_msg})
-    messages = list(chat_sessions[session_id])[-20:] # pyre-ignore[16, 6]
-    reply = await chat_completion(messages, get_engine, connector)
-    chat_sessions[session_id].append({"role": "assistant", "content": reply})
-    return {"reply": reply, "session_id": session_id}
+    """Send a message to the AI trading assistant with signal context."""
+    from web.backend import chat_engine
+    reply = await chat_engine.chat(
+        body.session_id, 
+        body.message, 
+        signal_context=body.signal_context
+    )
+    return {"reply": reply, "session_id": body.session_id}
 
 
 @app.get("/chat/history")

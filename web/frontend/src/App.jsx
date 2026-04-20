@@ -15,6 +15,7 @@ const Glossary = lazy(() => import('./pages/Glossary'))
 const FAQ = lazy(() => import('./pages/FAQ'))
 const Disclaimer = lazy(() => import('./pages/Disclaimer'))
 const ComingSoon = lazy(() => import('./pages/ComingSoon'))
+const PerformancePage = lazy(() => import('./pages/PerformancePage'))
 
 // Hidden features — code preserved, routes guarded with ComingSoon
 const LiveTrading = lazy(() => import('./pages/LiveTrading'))
@@ -62,6 +63,11 @@ function AppNav() {
   const { user, logout } = useAuth()
   const [commandOpen, setCommandOpen] = useState(false)
   const [userMenuOpen, setUserMenuOpen] = useState(false)
+  const [regime, setRegime] = useState(null)
+
+  useEffect(() => {
+    api.getMarketRegime().then(setRegime).catch(() => {})
+  }, [])
 
   useEffect(() => {
     const down = (e) => {
@@ -158,6 +164,31 @@ function AppNav() {
                 )}
               </div>
 
+              {regime && (
+                <div 
+                  className={`hidden lg:flex items-center gap-2 px-3 py-1.5 border font-data text-[10px] font-bold uppercase tracking-widest cursor-help group relative ${
+                    regime.regime === 'BULL' ? 'bg-apex-profit/10 border-apex-profit/30 text-apex-profit' :
+                    regime.regime === 'BEAR' ? 'bg-apex-loss/10 border-apex-loss/30 text-apex-loss' :
+                    regime.regime === 'HIGH_VOLATILITY' ? 'bg-apex-warning/10 border-apex-warning/30 text-apex-warning' :
+                    'bg-white/5 border-white/10 text-white/50'
+                  }`}
+                  title={regime.regime_note}
+                >
+                  <Activity size={12} className={regime.regime === 'HIGH_VOLATILITY' ? 'animate-pulse' : ''} />
+                  <span>Regime: {regime.regime}</span>
+                  
+                  {/* Tooltip */}
+                  <div className="absolute top-full right-0 mt-2 w-64 p-3 bg-black border border-white/10 shadow-2xl opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50 normal-case font-normal text-white/80 text-[11px] leading-relaxed">
+                    <p className="font-bold text-white mb-1 uppercase tracking-widest text-[9px]">Market Context</p>
+                    {regime.regime_note}
+                    <div className="mt-2 pt-2 border-t border-white/5 flex justify-between text-[9px] uppercase tracking-tighter">
+                      <span>SPY vs 200MA: {regime.spy_vs_200ma}%</span>
+                      <span>VIX Profile: {regime.vix_level}</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               <button
                 onClick={() => setCommandOpen(true)}
                 className="flex items-center gap-2 px-3 py-2 border border-white/10 hover:border-apex-cyan/50 text-white/40 hover:text-apex-cyan hover:bg-apex-cyan/5 text-xs font-data transition-all shrink-0 group"
@@ -203,6 +234,7 @@ function App() {
                   <Route path="/signup" element={<Signup />} />
                   <Route path="/dashboard" element={<Dashboard />} />
                   <Route path="/charts" element={<Charts />} />
+                  <Route path="/admin/performance" element={<PerformancePage />} />
 
                   {/* Hidden features — show ComingSoon placeholder */}
                   <Route path="/trading" element={<ComingSoon />} />
