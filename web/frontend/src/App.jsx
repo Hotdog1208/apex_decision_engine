@@ -39,7 +39,7 @@ import NoiseOverlay from './components/NoiseOverlay'
 import GlitchText from './components/GlitchText'
 import { AuthProvider, useAuth } from './context/AuthContext'
 import { Toaster, toast } from 'react-hot-toast'
-import { Sun, Moon, Command, LayoutDashboard, BarChart2, ChevronDown, LogOut, User } from 'lucide-react'
+import { Sun, Moon, Command, LayoutDashboard, BarChart2, Activity, ChevronDown, LogOut, User } from 'lucide-react'
 
 function ThemeToggle() {
   const { theme, setTheme } = useTheme()
