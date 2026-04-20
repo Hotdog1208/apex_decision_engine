@@ -4,6 +4,7 @@ import { ThemeProvider, useTheme } from './context/ThemeContext'
 import { Suspense, lazy } from 'react'
 
 const Dashboard = lazy(() => import('./components/Dashboard'))
+import { api } from './api'
 const Landing = lazy(() => import('./pages/Landing'))
 const Charts = lazy(() => import('./pages/Charts'))
 const Login = lazy(() => import('./pages/Login'))
@@ -238,7 +239,7 @@ function App() {
 
                   {/* Hidden features — show ComingSoon placeholder */}
                   <Route path="/trading" element={<ComingSoon />} />
-                  <Route path="/chat" element={<ComingSoon />} />
+                  <Route path="/chat" element={<Chat />} />
                   <Route path="/alerts" element={<ComingSoon />} />
                   <Route path="/news" element={<ComingSoon />} />
                   <Route path="/calendar" element={<ComingSoon />} />
