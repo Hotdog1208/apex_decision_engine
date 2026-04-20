@@ -10,14 +10,13 @@ sys.path.insert(0, str(project_root))
 from config.system_config import get_default_system_config  # type: ignore
 from engine.core.decision_engine import DecisionEngine  # type: ignore
 from engine.api.market_data_adapter import MockMarketDataAdapter  # type: ignore
-from web.backend.chat_engine import chat_completion  # type: ignore
+from web.backend.chat_engine import chat  # type: ignore
 from dotenv import load_dotenv  # type: ignore
 
 load_dotenv()
 
 async def _test_chat():
-    print("Testing RAG Chatbot with Gemini...")
-    print(f"GEMINI_API_KEY set: {bool(os.environ.get('GEMINI_API_KEY'))}")
+    print("Testing RAG Chatbot with Claude...")
     
     # Mock connector
     class MockConnector:
@@ -27,13 +26,8 @@ async def _test_chat():
     
     connector = MockConnector()
     
-    def get_engine():
-        return DecisionEngine(portfolio_value=1_000_000, data_dir=project_root / "data")
-        
-    messages = [{"role": "user", "content": "Why did ADE just alert me on TSLA? What is the predictive score?"}]
-    
     try:
-        reply = await chat_completion(messages, get_engine, connector)
+        reply = await chat("test_sess", "Why did ADE just alert me on TSLA? What is the predictive score?")
         print("\n--- CHATBOT REPLY ---")
         print(reply)
         print("---------------------")

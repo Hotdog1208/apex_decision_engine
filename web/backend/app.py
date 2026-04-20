@@ -27,7 +27,6 @@ from config.system_config import get_default_system_config  # type: ignore
 from engine.core.decision_engine import DecisionEngine  # type: ignore
 from engine.core.performance_engine import PerformanceEngine  # type: ignore
 from engine.api import MockETradeConnector, YahooConnector  # type: ignore
-from web.backend.chat_engine import chat_completion  # type: ignore
 from web.backend.data_services import (  # type: ignore
     get_mock_alerts,
     get_news as fetch_news,
