@@ -1,4 +1,5 @@
 # Apex Decision Engine (ADE)
+![CI](https://github.com/Hotdog1208/apex_decision_engine/actions/workflows/ci.yml/badge.svg)
 
 Institutional-grade multi-asset trading intelligence framework. Production-ready architecture with E*TRADE API preparation.
 

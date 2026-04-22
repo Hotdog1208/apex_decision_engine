@@ -35,6 +35,13 @@ def pandas_atr(high, low, close, length=14):
     tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
     return tr.rolling(window=length).mean()
 
+def pandas_bollinger_bands(series, length=20, num_std=2):
+    sma = series.rolling(window=length).mean()
+    std = series.rolling(window=length).std()
+    upper = sma + (std * num_std)
+    lower = sma - (std * num_std)
+    return upper, sma, lower
+
 def calculate_indicators(series: List[Dict[str, Any]]) -> Dict[str, Any]:
     """
     Calculate RSI, MACD, MAs, ATR, and Volume Ratio from OHLCV series.
@@ -65,6 +72,20 @@ def calculate_indicators(series: List[Dict[str, Any]]) -> Dict[str, Any]:
         df['ma50'] = pandas_sma(df['close'], length=50)
         df['ma200'] = pandas_sma(df['close'], length=200) if len(df) >= 200 else np.nan
         
+        # EMA 9 and 21
+        df['ema9'] = df['close'].ewm(span=9, adjust=False).mean()
+        df['ema21'] = df['close'].ewm(span=21, adjust=False).mean()
+        
+        # 52-week High/Low (approx 252 trading days)
+        df['high52'] = df['high'].rolling(window=min(252, len(df))).max()
+        df['low52'] = df['low'].rolling(window=min(252, len(df))).min()
+        
+        # Bollinger Bands
+        bb_upper, bb_mid, bb_lower = pandas_bollinger_bands(df['close'], length=20)
+        df['bb_upper'] = bb_upper
+        df['bb_mid'] = bb_mid
+        df['bb_lower'] = bb_lower
+        
         # ATR (14)
         df['atr'] = pandas_atr(df['high'], df['low'], df['close'], length=14)
         
@@ -74,13 +95,43 @@ def calculate_indicators(series: List[Dict[str, Any]]) -> Dict[str, Any]:
         
         latest = df.iloc[-1]
         
+        # BB Position (0-1 scale)
+        bb_range = latest['bb_upper'] - latest['bb_lower']
+        bb_pos = (latest['close'] - latest['bb_lower']) / bb_range if bb_range > 0 else 0.5
+        
+        # MACD Direction
+        prev_hist = df['MACDh'].iloc[-2] if len(df) > 1 else 0
+        macd_direction = "BULLISH" if latest['MACDh'] > prev_hist else "BEARISH"
+        
         return {
             "current_price": float(latest['close']),
-            "rsi": float(latest['rsi']) if not pd.isna(latest['rsi']) else 50.0,
+            "rsi": {
+                "value": float(latest['rsi']) if not pd.isna(latest['rsi']) else 50.0,
+                "zone": "OVERBOUGHT" if latest['rsi'] > 70 else "OVERSOLD" if latest['rsi'] < 30 else "NEUTRAL"
+            },
             "macd": {
                 "line": float(latest['MACD']) if not pd.isna(latest['MACD']) else 0.0,
                 "signal": float(latest['MACDs']) if not pd.isna(latest['MACDs']) else 0.0,
-                "histogram": float(latest['MACDh']) if not pd.isna(latest['MACDh']) else 0.0
+                "histogram": float(latest['MACDh']) if not pd.isna(latest['MACDh']) else 0.0,
+                "direction": macd_direction
+            },
+            "ema": {
+                "ema9": float(latest['ema9']),
+                "ema21": float(latest['ema21']),
+                "relationship": "ABOVE" if latest['ema9'] > latest['ema21'] else "BELOW",
+                "distance_pct": round(((latest['ema9'] / latest['ema21']) - 1) * 100, 2) if latest['ema21'] > 0 else 0
+            },
+            "range_52w": {
+                "high": float(latest['high52']) if not pd.isna(latest['high52']) else float(latest['high']),
+                "low": float(latest['low52']) if not pd.isna(latest['low52']) else float(latest['low']),
+                "dist_from_high_pct": round(((latest['close'] / latest['high52']) - 1) * 100, 2) if not pd.isna(latest['high52']) else 0,
+                "dist_from_low_pct": round(((latest['close'] / latest['low52']) - 1) * 100, 2) if not pd.isna(latest['low52']) else 0
+            },
+            "bollinger": {
+                "upper": float(latest['bb_upper']),
+                "mid": float(latest['bb_mid']),
+                "lower": float(latest['bb_lower']),
+                "position": round(float(bb_pos), 2)
             },
             "ma20": float(latest['ma20']) if not pd.isna(latest['ma20']) else None,
             "ma50": float(latest['ma50']) if not pd.isna(latest['ma50']) else None,

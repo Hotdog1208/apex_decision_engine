@@ -34,3 +34,4 @@ pyright_check*.txt
 flake8_errors.txt
 mypy_errors.txt
 test_out.txt
+data/paper_trade_log.json

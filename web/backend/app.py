@@ -37,6 +37,7 @@ from web.backend.data_services import (  # type: ignore
 )
 from engine.core.indicators import calculate_indicators, detect_market_regime  # type: ignore
 import anthropic  # type: ignore
+from web.backend.paper_trader import PaperTrader
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -106,6 +107,8 @@ price_alerts: List[Dict[str, Any]] = []
 users_db: Dict[str, Dict[str, Any]] = {}
 event_log: List[Dict[str, Any]] = []
 signal_log: List[Dict[str, Any]] = []  # Task 4: Signal Performance Logging
+signal_cache: Dict[str, Dict[str, Any]] = {} # Memory cache: {symbol: {"timestamp": float, "data": dict}}
+paper_trader = PaperTrader()
 
 
 async def broadcast(payload: Dict[str, Any]) -> None:
@@ -146,6 +149,16 @@ async def startup():
         logger.info("News & calendar: Finnhub enabled")
     if (os.environ.get("ANTHROPIC_API_KEY") or "").strip():
         logger.info("Chat: Claude enabled")
+    
+    # Start paper trader evaluation background job
+    import asyncio
+    async def run_evaluation_loop():
+        while True:
+            paper_trader.evaluate_signals()
+            await asyncio.sleep(86400) # Every 24 hours
+    
+    asyncio.create_task(run_evaluation_loop())
+    logger.info("Paper trade evaluation job scheduled.")
 
 
 # --- Auth components needed by endpoints ---
@@ -360,6 +373,12 @@ async def get_signal_performance() -> Dict[str, Any]:
     }
 
 
+@app.get("/admin/accuracy")
+async def get_accuracy_dashboard(user: str = Depends(get_current_user)) -> Dict[str, Any]:
+    """Return administrative accuracy stats from paper trading log."""
+    return paper_trader.get_stats()
+
+
 @app.get("/chart/{symbol}")
 async def get_chart_data(symbol: str, period: str = "3mo", interval: str = "1d") -> Dict[str, Any]:
     """Compatibility endpoint for chart data."""
@@ -380,24 +399,27 @@ async def get_chart_data(symbol: str, period: str = "3mo", interval: str = "1d")
 # --- Signal Engine with Claude ---
 import anthropic
 
-SIGNAL_SYSTEM_PROMPT = """You are a senior quantitative analyst and institutional risk manager for the Apex Decision Engine (ADE).
-Your task is to generate high-conviction, data-driven trading signals based on the technical and macro data provided.
+SIGNAL_SYSTEM_PROMPT = """You are ADE's signal reasoning engine. You receive pre-computed quantitative indicators for a stock. Your job is to synthesize them into a directional verdict for the next 1-3 trading days.
 
-CRITICAL INSTRUCTIONS:
-1. NEVER use vague language (e.g., "looks bullish", "could go up", "potentially").
-2. EVERY claim must reference a specific data point or value provided in the context.
-3. Assign a confidence score (0-100) based on the sum of four pillars: Trend, Momentum, Volume, and Risk/Reward (each max 25).
-4. Identify a clear stop level (invalidation) and a logical price target with concise mathematical reasoning.
-5. If the verdict (e.g., BUY) conflicts with the current market regime (e.g., BEAR), set regime_conflict to true and explain it.
-6. Output MUST BE strictly valid JSON according to the schema provided.
+Rules:
+- Base verdict only on the indicators provided. Do not use training knowledge about the company.
+- Verdict must be one of: STRONG_BUY, BUY, WATCH, AVOID, STRONG_AVOID
+- Confidence must be 0-100 integer
+- Reasoning must reference at least 3 specific indicators by name
+- If indicators conflict, state the conflict explicitly and explain which side dominates and why
+- Never hedge with "it depends" — commit to a verdict
+- Output JSON only. No preamble. No markdown.
 
-The signal must reason through:
-- Trend: Price vs MAs (20, 50, 200)
-- Momentum: RSI and MACD status
-- Volume: Relative volume vs 20-day average
-- Risk/Reward: ATR-based volatility and proximity to support/resistance levels
-- Macro: Market regime context (SPY status)
-"""
+Output schema:
+{
+  "verdict": "BUY",
+  "confidence": 74,
+  "timeframe": "1-3 days",
+  "bull_case": "one sentence",
+  "bear_case": "one sentence", 
+  "key_indicators": ["RSI at 34 (oversold)", "MACD bullish cross", "volume 1.8x average"],
+  "reasoning": "2-3 sentence synthesis paragraph"
+}"""
 
 _REGIME_CACHE: Dict[str, Any] = {"data": None, "timestamp": 0}
 
@@ -419,85 +441,67 @@ def get_cached_regime(connector: Any) -> Dict[str, Any]:
         return {"regime": "NEUTRAL", "spy_vs_200ma": 0, "spy_rsi": 50, "vix_level": "NORMAL", "regime_note": "Regime undetected"}
 
 async def _generate_claude_signal(sym: str, connector: Any) -> Dict[str, Any]:
-    """Generate a high-accuracy signal using Claude Sonnet."""
+    """Generate a high-accuracy signal using Claude Sonnet with structured reasoning."""
+    global signal_cache
+    
+    # 0. Check Cache
+    now = time.time()
+    if sym in signal_cache:
+        cached = signal_cache[sym]
+        if now - cached["timestamp"] < 900: # 15 minutes
+            logger.info(f"Returning cached signal for {sym}")
+            return cached["data"]
+
     api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
     if not api_key:
-        # Fallback to current mock if no key
         snapshot = connector.market_data.fetch_market_snapshot()
         return _generate_signal_for_symbol(sym, snapshot)
 
     try:
-        # 1. Gather Data
+        # 1. Gather Market Data & Indicators
         quote = connector.market_data.fetch_quote(sym)
-        hist = connector.market_data.fetch_ohlc(sym, period="6mo", interval="1d")
+        hist = connector.market_data.fetch_ohlc(sym, period="1y", interval="1d")
         series = hist.get("series", [])
         indicators = calculate_indicators(series)
         regime = get_cached_regime(connector)
         
-        # 2. Get earnings/news (Task 6)
-        from web.backend.data_services import get_news as fetch_news
-        news = [n for n in fetch_news() if sym in n.get("symbols", [])][:2]
-        headlines = [n.get("headline") for n in news]
+        # 2. Get UOA Score
+        from engine.ml_models.uoa_service import get_uoa_score
+        uoa_data = get_uoa_score(sym, series)
+        uoa_label = uoa_data["label"] if uoa_data else "No data available"
         
-        earnings_date = get_earnings_calendar(sym)
-        days_to_earnings = None
-        if earnings_date:
-            from datetime import date
-            ed = date.fromisoformat(earnings_date)
-            days_to_earnings = (ed - date.today()).days
+        # 3. Get News Sentiment summary
+        news_list = [n for n in fetch_news() if sym in n.get("symbols", [])]
+        pos_count = len([n for n in news_list if n.get("sentiment", 50) > 60])
+        neg_count = len([n for n in news_list if n.get("sentiment", 50) < 40])
+        neu_count = len(news_list) - pos_count - neg_count
+        overall_sentiment = "POSITIVE" if pos_count > neg_count else "NEGATIVE" if neg_count > pos_count else "NEUTRAL"
         
-        earnings_flag = days_to_earnings is not None and days_to_earnings <= 14
-        earnings_palty = days_to_earnings is not None and days_to_earnings <= 7
-        
-        # 3. Construct Context for Claude
+        # 4. Construct Context
         context = {
             "symbol": sym,
-            "current_price": quote.get("price"),
-            "indicators": indicators,
-            "market_regime": regime,
-            "news_headlines": headlines,
-            "earnings_calendar": {
-                "days_to_earnings": days_to_earnings,
-                "is_imminent": earnings_flag
+            "price": quote.get("price"),
+            "technical_indicators": indicators,
+            "uoa_score": uoa_label,
+            "market_regime": regime["regime"],
+            "news_sentiment": {
+                "summary": overall_sentiment,
+                "counts": {"pos": pos_count, "neg": neg_count, "neu": neu_count}
             }
         }
 
         client = anthropic.Anthropic(api_key=api_key)
-        model_name = os.environ.get("ANTHROPIC_CHAT_MODEL", "claude-sonnet-4-20250514")
+        model_name = "claude-sonnet-4-20250514"
         
-        prompt = f"""Generate a trading signal for {sym} based on the following data:
-{json.dumps(context, indent=2)}
-
-Output the result in the following JSON format ONLY:
-{{
-  "verdict": "BUY | WATCH | AVOID",
-  "confidence_score": 0-100,
-  "confidence_breakdown": {{
-    "trend_alignment": 0-25,
-    "momentum_strength": 0-25,
-    "volume_confirmation": 0-25,
-    "risk_reward_ratio": 0-25
-  }},
-  "entry_zone": "string",
-  "stop_loss": "string with rationale",
-  "price_target": "string with rationale",
-  "target_timeframe": "string",
-  "thesis": "3-5 sentence paragraph referencing exact data",
-  "invalidation": "what price/event makes this wrong",
-  "regime_conflict": boolean,
-  "regime_note": "string if conflict, else null",
-  "data_inputs_used": ["list of fields"]
-}}"""
-
         response = client.messages.create(
             model=model_name,
-            max_tokens=2000,
+            max_tokens=500,
             system=SIGNAL_SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": prompt}]
+            messages=[{"role": "user", "content": f"Generate signal for: {json.dumps(context)}"}]
         )
         
         raw_reply = response.content[0].text
-        # Extract JSON (Claude sometimes wraps in markdown)
+        # Extract JSON
         if "```json" in raw_reply:
             raw_json = raw_reply.split("```json")[1].split("```")[0].strip()
         elif "```" in raw_reply:
@@ -506,38 +510,38 @@ Output the result in the following JSON format ONLY:
             raw_json = raw_reply.strip()
             
         signal = json.loads(raw_json)
+        
+        # Add metadata for UI/Persistence
         signal["symbol"] = sym
         signal["price"] = quote.get("price")
         signal["generated_at"] = datetime.utcnow().isoformat() + "Z"
-
-        # Apply Task 6 Earnings Penalty
-        if earnings_palty:
-            signal["confidence_score"] = max(0, signal.get("confidence_score", 0) - 15)
-            if "confidence_breakdown" not in signal:
-                signal["confidence_breakdown"] = {}
-            signal["confidence_breakdown"]["earnings_proximity_penalty"] = -15
-            logger.info(f"Earnings penalty applied to {sym}: -15")
         
-        # Log to signal_log for performance tracking (Task 4)
-        import uuid
-        signal_entry = {
-            "signal_id": str(uuid.uuid4()),
-            "symbol": signal["symbol"],
-            "verdict": signal["verdict"],
-            "confidence_score": signal["confidence_score"],
-            "entry_zone": signal["entry_zone"],
-            "stop_loss": signal["stop_loss"],
-            "price_target": signal["price_target"],
-            "generated_at": signal["generated_at"],
-            "price_at_generation": signal["price"],
-            "outcome": None,
-            "outcome_recorded_at": None
-        }
-        signal_log.append(signal_entry)
-        signal["signal_id"] = signal_entry["signal_id"] # Pass ID to frontend
+        # 5. Calibration (Task 3)
+        stats = paper_trader.get_stats()
+        v_key = signal.get("verdict", "WATCH").upper()
+        v_data = stats.get("by_verdict", {}).get(v_key, {})
         
-        logger.info(f"Signal generated for {sym}: {signal['verdict']} ({signal['confidence_score']})")
+        raw_conf = signal.get("confidence", 50)
+        signal["raw_confidence"] = raw_conf
         
+        if v_data.get("evaluated", 0) >= 10:
+            factor = v_data["accuracy"] / 100.0
+            calibrated = int(raw_conf * factor)
+            signal["confidence"] = calibrated
+            signal["calibrated_label"] = f"Based on {v_data['evaluated']} evaluated signals"
+        else:
+            signal["calibrated_label"] = "Uncalibrated — building track record"
+        
+        # Pass indicators to UI for details expansion
+        signal["indicators_snapshot"] = indicators
+        
+        # 6. Log for Paper Trading (Task 2)
+        paper_trader.log_signal(signal)
+        
+        # 7. Cache Result
+        signal_cache[sym] = {"timestamp": now, "data": signal}
+        
+        logger.info(f"Signal generated for {sym}: {signal['verdict']} ({signal['confidence']})")
         return signal
 
     except Exception as e:

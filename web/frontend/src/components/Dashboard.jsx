@@ -21,6 +21,14 @@ const VERDICT_STYLES = {
     glow: 'shadow-[0_0_20px_rgba(0,255,136,0.15)]',
     icon: TrendingUp,
   },
+  strong_buy: {
+    bg: 'bg-apex-profit/20',
+    border: 'border-apex-profit/60',
+    text: 'text-apex-profit',
+    badge: 'bg-apex-profit text-black font-black uppercase tracking-widest',
+    glow: 'shadow-[0_0_30px_rgba(0,255,136,0.3)]',
+    icon: Zap,
+  },
   watch: {
     bg: 'bg-apex-warning/10',
     border: 'border-apex-warning/40',
@@ -37,6 +45,15 @@ const VERDICT_STYLES = {
     glow: 'shadow-[0_0_20px_rgba(255,0,85,0.15)]',
     icon: TrendingDown,
   },
+  strong_avoid: {
+    bg: 'bg-apex-loss/20',
+    border: 'border-apex-loss/60',
+    text: 'text-apex-loss',
+    badge: 'bg-apex-loss text-white font-black uppercase tracking-widest',
+    glow: 'shadow-[0_0_30px_rgba(255,0,85,0.3)]',
+    icon: Shield,
+  },
+}
 }
 
 function SignalCard({ signal, isSelected, onSelect, onExpandReasoning }) {
@@ -102,7 +119,10 @@ function SignalCard({ signal, isSelected, onSelect, onExpandReasoning }) {
       {/* Confidence bar */}
       <div className="mb-3">
         <div className="flex justify-between items-center mb-1">
-          <span className="text-white/40 text-[10px] font-data uppercase tracking-widest">Confidence</span>
+          <div className="flex flex-col">
+            <span className="text-white/40 text-[10px] font-data uppercase tracking-widest">Confidence</span>
+            <span className="text-[8px] text-white/30 truncate max-w-[120px]">{signal.calibrated_label}</span>
+          </div>
           <span className={`text-xs font-data font-bold ${style.text}`}>{confidence.toFixed(0)}%</span>
         </div>
         <div className="h-1 bg-white/10 w-full overflow-hidden">
@@ -115,10 +135,12 @@ function SignalCard({ signal, isSelected, onSelect, onExpandReasoning }) {
         </div>
       </div>
 
-      {/* Thesis */}
-      <p className="text-white/50 text-[11px] font-body leading-relaxed mb-3">
-        {signal.thesis || signal.reasoning}
-      </p>
+      {/* Synthesis */}
+      <div className="space-y-2 mb-3">
+        <p className="text-white/80 text-[11px] font-body leading-relaxed line-clamp-2">
+            {signal.reasoning}
+        </p>
+      </div>
 
       {/* Expandable "Why does ADE say this?" */}
       <button
@@ -144,56 +166,49 @@ function SignalCard({ signal, isSelected, onSelect, onExpandReasoning }) {
             className="overflow-hidden"
           >
             <div className="pt-3 space-y-4 border-t border-white/5">
-              {/* Levels Row */}
-              <div className="grid grid-cols-3 gap-2 py-2 border-b border-white/5">
-                {[
-                  { label: 'Entry', value: signal.entry_zone, color: 'text-apex-cyan' },
-                  { label: 'Stop', value: signal.stop_loss, color: 'text-apex-loss' },
-                  { label: 'Target', value: signal.price_target, color: 'text-apex-profit' }
-                ].map((item, idx) => (
-                  <div key={idx} className="flex flex-col">
-                    <span className="text-[8px] text-white/30 uppercase tracking-widest">{item.label}</span>
-                    <span className={`text-[10px] font-bold truncate ${item.color}`}>{item.value || 'N/A'}</span>
-                  </div>
-                ))}
-              </div>
-
-              {/* Confidence Breakdown */}
-              <div className="space-y-1.5">
-                {[
-                  { label: 'Trend Alignment', key: 'trend_alignment' },
-                  { label: 'Momentum Strength', key: 'momentum_strength' },
-                  { label: 'Volume Confirmation', key: 'volume_confirmation' },
-                  { label: 'Risk/Reward Ratio', key: 'risk_reward_ratio' }
-                ].map((item) => {
-                  const val = signal.confidence_breakdown?.[item.key] || 0;
-                  const pct = (val / 25) * 100;
-                  return (
-                    <div key={item.key} className="flex items-center justify-between">
-                      <span className="text-white/40 text-[9px] font-data uppercase tracking-wider">{item.label}</span>
-                      <div className="flex items-center gap-2">
-                        <div className="w-12 h-0.5 bg-white/5 overflow-hidden">
-                          <div className={`h-full ${style.badge.split(' ')[0]}`} style={{ width: `${pct}%` }} />
-                        </div>
-                        <span className={`text-[9px] font-data font-bold ${style.text}`}>{val.toFixed(0)}/25</span>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-
-              {/* Invalidation */}
-              {signal.invalidation && (
-                <div className="p-2 bg-apex-warning/5 border-l-2 border-apex-warning">
-                  <p className="text-apex-warning text-[8px] font-data font-bold uppercase tracking-widest mb-1">Signal fails if:</p>
-                  <p className="text-[10px] text-white/70 italic leading-snug">{signal.invalidation}</p>
+              {/* Bull/Bear Case */}
+              <div className="grid grid-cols-2 gap-3">
+                <div className="p-2 bg-apex-profit/5 border border-apex-profit/10">
+                  <span className="text-[8px] text-apex-profit uppercase font-data font-bold block mb-1">Bull Case</span>
+                  <p className="text-[9px] text-white/60 leading-tight">{signal.bull_case}</p>
                 </div>
-              )}
+                <div className="p-2 bg-apex-loss/5 border border-apex-loss/10">
+                  <span className="text-[8px] text-apex-loss uppercase font-data font-bold block mb-1">Bear Case</span>
+                  <p className="text-[9px] text-white/60 leading-tight">{signal.bear_case}</p>
+                </div>
+              </div>
 
-              {/* Earnings Warning */}
-              {signal.confidence_breakdown?.earnings_proximity_penalty && (
-                <div className="flex items-center gap-2 text-apex-loss text-[8px] font-data uppercase tracking-widest bg-apex-loss/10 px-2 py-1 border border-apex-loss/20 w-fit">
-                  <span>⚠ Earnings Imminent — adjusted -15</span>
+              {/* Key Indicators List */}
+              <div className="space-y-2">
+                <span className="text-[8px] text-white/30 uppercase tracking-[0.2em] font-data">Key Signals</span>
+                <div className="flex flex-wrap gap-1.5">
+                  {(signal.key_indicators || []).map((ind, idx) => (
+                    <span key={idx} className="px-2 py-0.5 bg-white/5 border border-white/10 text-white/50 text-[9px] font-data truncate max-w-[150px]">
+                      {ind}
+                    </span>
+                  ))}
+                </div>
+              </div>
+
+              {/* Indicator Snapshots */}
+              {signal.indicators_snapshot && (
+                <div className="grid grid-cols-2 gap-2 text-[8px] font-data text-white/40 uppercase tracking-widest pt-2 border-t border-white/5">
+                  <div className="flex justify-between">
+                    <span>RSI</span>
+                    <span className="text-white">{signal.indicators_snapshot.rsi?.value?.toFixed(1)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>MACD</span>
+                    <span className="text-white">{signal.indicators_snapshot.macd?.histogram?.toFixed(3)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Vol Ratio</span>
+                    <span className="text-white">{signal.indicators_snapshot.volume_ratio?.toFixed(2)}x</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>52w High</span>
+                    <span className="text-white">{(signal.indicators_snapshot.range_52w?.dist_from_high_pct)?.toFixed(1)}%</span>
+                  </div>
                 </div>
               )}
             </div>
@@ -449,7 +464,10 @@ export default function Dashboard() {
                             <Cpu size={24} className="text-apex-accent" />
                         </div>
                         <div>
-                            <h3 className="text-sm font-data uppercase tracking-[0.2em] text-white/40 mb-1">Advanced Reasoning — {selectedSymbol}</h3>
+                            <div className="flex items-center gap-2 mb-1">
+                                <h3 className="text-sm font-data uppercase tracking-[0.2em] text-white/40">Market Reasoning — {selectedSymbol}</h3>
+                                <span className="text-[8px] text-white/20 uppercase tracking-widest border border-white/5 px-1.5 py-0.5">{selectedSignal.calibrated_label}</span>
+                            </div>
                             <div className="flex items-center gap-4">
                                 <span className={`text-2xl font-display font-black uppercase ${VERDICT_STYLES[selectedSignal.verdict?.toLowerCase()]?.text || 'text-white'}`}>
                                     {selectedSignal.verdict}
@@ -457,13 +475,13 @@ export default function Dashboard() {
                                 <div className="h-6 w-[1px] bg-white/10" />
                                 <div className="flex flex-col">
                                     <span className="text-white font-data text-sm font-bold">
-                                        {(selectedSignal.confidence_score !== undefined ? selectedSignal.confidence_score : selectedSignal.confidence * 100).toFixed(0)}%
+                                        {confidence.toFixed(0)}%
                                     </span>
                                     <span className="text-[9px] text-white/30 uppercase tracking-widest leading-none mt-1">Confidence</span>
                                 </div>
                                 <div className="h-6 w-[1px] bg-white/10" />
                                 <div className="flex flex-col">
-                                    <span className="text-white font-data text-xs uppercase">{selectedSignal.target_timeframe || 'TBD'}</span>
+                                    <span className="text-white font-data text-xs uppercase">{selectedSignal.timeframe || '1-3 DAYS'}</span>
                                     <span className="text-[9px] text-white/30 uppercase tracking-widest leading-none mt-1">Timeframe</span>
                                 </div>
                             </div>
@@ -475,129 +493,44 @@ export default function Dashboard() {
                         className="px-4 py-2 bg-white/5 hover:bg-apex-accent hover:text-black border border-white/10 hover:border-apex-accent font-data text-[10px] font-bold uppercase tracking-widest transition-all h-fit flex items-center gap-2"
                     >
                         <Zap size={14} />
-                        Regenerate Signal
+                        Refetch Signal
                     </button>
                 </div>
 
-                {/* Levels Section */}
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8 border-y border-white/5 py-8">
-                    {[
-                        { label: 'Entry Zone', value: selectedSignal.entry_zone || 'Market Order', icon: Activity, color: 'text-apex-cyan' },
-                        { label: 'Stop Loss', value: selectedSignal.stop_loss || 'N/A', icon: Shield, color: 'text-apex-loss' },
-                        { label: 'Price Target', value: selectedSignal.price_target || 'N/A', icon: Zap, color: 'text-apex-profit' }
-                    ].map((item, idx) => (
-                        <div key={idx} className="space-y-3">
-                            <div className="flex items-center gap-2 text-white/40 font-data text-[10px] uppercase tracking-widest">
-                                <item.icon size={12} className={item.color} />
-                                {item.label}
-                            </div>
-                            <p className={`text-xl font-display font-black tracking-tighter ${item.color}`}>
-                                {typeof item.value === 'string' && item.value.split(' ')[0]} 
-                                <span className={item.color + '/60 text-base ml-1'}>{typeof item.value === 'string' && item.value.split(' ').slice(1).join(' ')}</span>
-                            </p>
-                            <p className="text-[11px] text-white/50 leading-relaxed italic border-l border-white/10 pl-3">
-                                {idx === 1 ? selectedSignal.stop_loss_rationale : idx === 2 ? selectedSignal.price_target_rationale : 'Strategic identification zone.'}
-                                {/* Helper if rationale joined in field */}
-                                {item.value.includes('—') && item.value.split('—')[1]}
-                            </p>
-                        </div>
-                    ))}
-                </div>
-
-                {/* Main Thesis & Invalidation */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mb-8">
+                {/* Synthesis Section */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mb-8 pt-8 border-t border-white/5">
                     <div className="space-y-4">
-                        <div className="flex items-center justify-between">
-                            <h4 className="text-[10px] font-data uppercase tracking-[0.3em] text-apex-accent">Technical Thesis</h4>
-                            <button 
-                                onClick={() => window.print()}
-                                className="flex items-center gap-1.5 text-[9px] text-white/30 hover:text-white transition-colors uppercase tracking-widest"
-                            >
-                                <FileDown size={10} />
-                                Export PDF
-                            </button>
-                        </div>
-                        <p className="text-white/80 font-body text-sm leading-relaxed">
-                            {selectedSignal.thesis || selectedSignal.reasoning}
+                        <h4 className="text-[10px] font-data uppercase tracking-[0.3em] text-apex-accent">AI Synthesis</h4>
+                        <p className="text-white/90 font-body text-base leading-relaxed tracking-tight">
+                            {selectedSignal.reasoning}
                         </p>
-                        
-                        {/* Relative Strength Section */}
-                        <div className="mt-4 pt-4 border-t border-white/5 grid grid-cols-2 gap-4">
-                            <div>
-                                <p className="text-[9px] text-white/30 uppercase tracking-widest mb-1">Rel. Strength (SPY)</p>
-                                <p className={`text-xs font-data font-bold ${selectedSignal.regime_conflict ? 'text-apex-loss' : 'text-apex-profit'}`}>
-                                    {selectedSignal.regime_conflict ? '-1.2%' : '+2.4%'} vs Benchmark
-                                </p>
-                            </div>
-                            <div>
-                                <p className="text-[9px] text-white/30 uppercase tracking-widest mb-1">Sector Beta</p>
-                                <p className="text-xs font-data font-bold text-apex-cyan">1.15 High Conviction</p>
-                            </div>
+                        <div className="p-4 bg-apex-profit/5 border border-apex-profit/10 border-l-[3px]">
+                             <p className="text-[9px] text-apex-profit uppercase font-data font-bold tracking-widest mb-2">Bullish Driver</p>
+                             <p className="text-white/80 text-sm font-body">{selectedSignal.bull_case}</p>
                         </div>
-                        {selectedSignal.regime_conflict && (
-                            <div className="p-3 bg-apex-warning/10 border border-apex-warning/30 flex items-start gap-3">
-                                <Activity size={16} className="text-apex-warning mt-0.5" />
-                                <div>
-                                    <p className="text-apex-warning text-[10px] font-data font-bold uppercase tracking-widest mb-1">Regime Conflict Detected</p>
-                                    <p className="text-[11px] text-apex-warning/80 leading-snug">{selectedSignal.regime_note || "Signal opposes broader market trend."}</p>
-                                </div>
-                            </div>
-                        )}
                     </div>
                     
                     <div className="space-y-4">
-                        <h4 className="text-[10px] font-data uppercase tracking-[0.3em] text-apex-loss">Invalidation Points</h4>
-                        <div className="p-4 bg-apex-loss/5 border border-apex-loss/20 border-l-2">
-                             <p className="text-[11px] text-white/40 uppercase tracking-widest mb-2">This signal is wrong if:</p>
-                             <p className="text-white/80 text-sm italic font-body">
-                                {selectedSignal.invalidation || "Price breaches key structural support/resistance without volume expansion."}
-                             </p>
+                        <h4 className="text-[10px] font-data uppercase tracking-[0.3em] text-white/30">Key Supporting Indicators</h4>
+                        <div className="space-y-2">
+                             {(selectedSignal.key_indicators || []).map((tag, idx) => (
+                                 <div key={idx} className="flex items-center gap-3 p-3 bg-white/[0.03] border border-white/5">
+                                     <Activity size={14} className="text-apex-cyan/50" />
+                                     <span className="text-xs text-white/70 font-data">{tag}</span>
+                                 </div>
+                             ))}
+                        </div>
+                        <div className="p-4 bg-apex-loss/5 border border-apex-loss/10 border-l-[3px]">
+                             <p className="text-[9px] text-apex-loss uppercase font-data font-bold tracking-widest mb-2">Primary Risk</p>
+                             <p className="text-white/80 text-sm font-body">{selectedSignal.bear_case}</p>
                         </div>
                     </div>
-                </div>
-
-                {/* Confidence Breakdown Bars */}
-                <div className="space-y-6">
-                    <h4 className="text-[10px] font-data uppercase tracking-[0.3em] text-white/30">Confidence Breakdown (X/25)</h4>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-                        {Object.entries(selectedSignal.confidence_breakdown || {}).filter(([k]) => !['earnings_proximity_penalty'].includes(k)).map(([key, value]) => {
-                            const isPillar = ['trend_alignment', 'momentum_strength', 'volume_confirmation', 'risk_reward_ratio'].includes(key)
-                            const val = isPillar ? value : (value * 100)
-                            const max = isPillar ? 25 : 100
-                            const pct = (val / max) * 100
-                            const colorClass = pct > 75 ? 'bg-apex-profit' : pct > 40 ? 'bg-apex-warning' : 'bg-apex-loss'
-                            
-                            return (
-                                <div key={key} className="space-y-3">
-                                    <div className="flex justify-between items-center text-[10px] font-data tracking-widest uppercase">
-                                        <span className="text-white/40">{key.replace(/_/g, ' ')}</span>
-                                        <span className="text-white font-bold">{val.toFixed(0)}{isPillar ? '/25' : '%'}</span>
-                                    </div>
-                                    <div className="h-1.5 bg-white/5 w-full overflow-hidden">
-                                        <motion.div 
-                                            initial={{ width: 0 }}
-                                            animate={{ width: `${pct}%` }}
-                                            className={`h-full ${colorClass}`}
-                                        />
-                                    </div>
-                                </div>
-                            )
-                        })}
-                    </div>
-                    
-                    {/* Penalty Callouts */}
-                    {selectedSignal.confidence_breakdown?.earnings_proximity_penalty && (
-                        <div className="flex items-center gap-2 text-apex-loss text-[10px] font-data uppercase tracking-widest bg-apex-loss/10 px-3 py-2 border border-apex-loss/20 w-fit">
-                            <Activity size={12} />
-                            Earnings Penalty Applied: {selectedSignal.confidence_breakdown.earnings_proximity_penalty}
-                        </div>
-                    )}
                 </div>
 
                 {/* Calculator & Contextual Stats */}
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mt-8 pt-8 border-t border-white/5">
                     <div className="lg:col-span-2">
-                        <PositionCalculator price={selectedSignal.price} stopLoss={selectedSignal.stop_loss} />
+                        <PositionCalculator price={selectedSignal.price} stopLoss={selectedSignal.stop_loss || `${(selectedSignal.price * 0.95).toFixed(2)} (Managed Risk)`} />
                     </div>
                     <div className="cyber-panel p-6 bg-white/[0.02] border border-white/5 flex flex-col justify-between">
                         <div>
@@ -612,7 +545,11 @@ export default function Dashboard() {
                                 </div>
                                 <div className="flex justify-between border-b border-white/5 pb-2">
                                     <span className="text-[10px] text-white/30 font-data">AI Model</span>
-                                    <span className="text-[10px] text-white font-data">Claude 3.5 Sonnet</span>
+                                    <span className="text-[10px] text-white font-data">{model_name}</span>
+                                </div>
+                                <div className="flex justify-between border-b border-white/5 pb-2">
+                                    <span className="text-[10px] text-white/30 font-data">Raw Conf.</span>
+                                    <span className="text-[10px] text-white font-data">{selectedSignal.raw_confidence}%</span>
                                 </div>
                             </div>
                         </div>
@@ -625,13 +562,18 @@ export default function Dashboard() {
                     </div>
                 </div>
 
-                {/* Data Inputs used */}
-                {selectedSignal.data_inputs_used && (
-                    <div className="mt-8 pt-6 border-t border-white/5 flex flex-wrap gap-2 items-center">
-                        <span className="text-[9px] text-white/20 uppercase tracking-widest mr-2">Signals Integrated:</span>
-                        {selectedSignal.data_inputs_used.map(tag => (
-                            <span key={tag} className="px-2 py-0.5 bg-white/5 border border-white/10 text-white/40 text-[9px] uppercase tracking-tighter">
-                                {tag}
+                {/* Technical Baseline Snapshots */}
+                {selectedSignal.indicators_snapshot && (
+                    <div className="mt-8 pt-6 border-t border-white/5 flex flex-wrap gap-4 items-center">
+                        <span className="text-[9px] text-white/20 uppercase tracking-widest mr-2">Core Tech Data:</span>
+                        {[
+                            { l: 'RSI', v: selectedSignal.indicators_snapshot.rsi?.value?.toFixed(1) },
+                            { l: 'EMA 9/21', v: selectedSignal.indicators_snapshot.ema?.relationship },
+                            { l: '52w High', v: (selectedSignal.indicators_snapshot.range_52w?.dist_from_high_pct)?.toFixed(1) + '%' },
+                            { l: 'BB Pos', v: selectedSignal.indicators_snapshot.bollinger?.position }
+                        ].map(tag => (
+                            <span key={tag.l} className="px-2 py-0.5 bg-white/5 border border-white/10 text-white/40 text-[9px] uppercase tracking-tighter">
+                                {tag.l}: <span className="text-white/60 ml-1">{tag.v}</span>
                             </span>
                         ))}
                     </div>
