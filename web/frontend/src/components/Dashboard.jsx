@@ -54,7 +54,6 @@ const VERDICT_STYLES = {
     icon: Shield,
   },
 }
-}
 
 function SignalCard({ signal, isSelected, onSelect, onExpandReasoning }) {
   const [expanded, setExpanded] = useState(false)
