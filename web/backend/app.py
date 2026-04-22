@@ -463,7 +463,7 @@ async def _generate_claude_signal(sym: str, connector: Any) -> Dict[str, Any]:
         }
 
         client = anthropic.Anthropic(api_key=api_key)
-        model_name = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
+        model_name = os.environ.get("ANTHROPIC_CHAT_MODEL", "claude-sonnet-4-20250514")
         
         prompt = f"""Generate a trading signal for {sym} based on the following data:
 {json.dumps(context, indent=2)}

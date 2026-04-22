@@ -125,7 +125,7 @@ async def chat(
 
     try:
         client = anthropic.Anthropic(api_key=api_key)
-        model_name = os.environ.get("ANTHROPIC_MODEL", "claude-3-5-sonnet-20240620")
+        model_name = os.environ.get("ANTHROPIC_CHAT_MODEL", "claude-sonnet-4-20250514")
         
         # Build RAG Context
         rag_context = build_rag_context(message, connector)

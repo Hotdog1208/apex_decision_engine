@@ -1,7 +1,7 @@
 {
   "timestamp": "2025-02-13T09:30:00Z",
   "stocks": [
-    {"symbol": "AAPL", "price": 185.5, "bid": 185.48, "ask": 185.52, "volume": 2500000, "sector": "Technology", "returns_20d": 0.045, "returns_10d": 0.022, "volatility_20d": 0.18, "volatility_10d": 0.15, "high_20d": 188.2, "low_20d": 172.1, "close_prev": 184.2},
+    {"symbol": "AAPL", "price": 207.5, "bid": 207.48, "ask": 207.52, "volume": 2500000, "sector": "Technology", "returns_20d": 0.045, "returns_10d": 0.022, "volatility_20d": 0.18, "volatility_10d": 0.15, "high_20d": 210.2, "low_20d": 192.1, "close_prev": 206.2},
     {"symbol": "MSFT", "price": 415.3, "bid": 415.25, "ask": 415.35, "volume": 1800000, "sector": "Technology", "returns_20d": 0.038, "returns_10d": 0.018, "volatility_20d": 0.16, "volatility_10d": 0.14, "high_20d": 422, "low_20d": 398.5, "close_prev": 414.1},
     {"symbol": "NVDA", "price": 875.2, "bid": 875, "ask": 875.4, "volume": 3200000, "sector": "Technology", "returns_20d": 0.122, "returns_10d": 0.065, "volatility_20d": 0.35, "volatility_10d": 0.28, "high_20d": 890, "low_20d": 720, "close_prev": 868.5},
     {"symbol": "GOOGL", "price": 142.8, "bid": 142.75, "ask": 142.85, "volume": 2100000, "sector": "Technology", "returns_20d": 0.055, "returns_10d": 0.028, "volatility_20d": 0.2, "volatility_10d": 0.17, "high_20d": 145, "low_20d": 132, "close_prev": 141.5},
@@ -14,7 +14,7 @@
     {"symbol": "SPY", "price": 485.2, "bid": 485.15, "ask": 485.25, "volume": 6200000, "sector": "ETF", "returns_20d": 0.032, "returns_10d": 0.016, "volatility_20d": 0.1, "volatility_10d": 0.08, "high_20d": 492, "low_20d": 468, "close_prev": 483.5}
   ],
   "price_history": {
-    "AAPL": [172.1, 174.5, 176.2, 178.9, 181.2, 182.5, 180.3, 183.1, 185, 184.2, 185.5],
+    "AAPL": [192.1, 194.5, 196.2, 198.9, 201.2, 202.5, 200.3, 203.1, 205, 206.2, 207.5],
     "MSFT": [398.5, 402, 405.5, 408, 410.2, 412, 409.5, 411, 413.5, 414.1, 415.3],
     "NVDA": [720, 765, 810, 835, 850, 865, 855, 868, 872, 868.5, 875.2],
     "GOOGL": [132, 135, 138, 139, 140, 141, 140.5, 141, 142, 141.5, 142.8],

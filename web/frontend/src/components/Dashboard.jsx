@@ -116,7 +116,7 @@ function SignalCard({ signal, isSelected, onSelect, onExpandReasoning }) {
       </div>
 
       {/* Thesis */}
-      <p className="text-white/50 text-[11px] font-body leading-relaxed line-clamp-3 mb-3">
+      <p className="text-white/50 text-[11px] font-body leading-relaxed mb-3">
         {signal.thesis || signal.reasoning}
       </p>
 
@@ -143,33 +143,59 @@ function SignalCard({ signal, isSelected, onSelect, onExpandReasoning }) {
             transition={{ duration: 0.3 }}
             className="overflow-hidden"
           >
-            <div className="pt-3 space-y-2 border-t border-white/5">
-              {Object.entries(signal.confidence_breakdown || {}).map(([key, value]) => {
-                // If it's a 25-point breakdown, show X/25, else show %
-                const isBreakdown = ['trend_alignment', 'momentum_strength', 'volume_confirmation', 'risk_reward_ratio'].includes(key);
-                const val = isBreakdown ? value : value * 100;
-                const max = isBreakdown ? 25 : 100;
-                const pct = (val / max) * 100;
-                
-                return (
-                  <div key={key} className="flex items-center justify-between">
-                    <span className="text-white/50 text-[10px] font-data uppercase tracking-wider">
-                      {key.replace(/_/g, ' ')}
-                    </span>
-                    <div className="flex items-center gap-2">
-                      <div className="w-16 h-1 bg-white/10 overflow-hidden">
-                        <div
-                          className={`h-full ${style.badge.split(' ')[0]}`}
-                          style={{ width: `${pct}%` }}
-                        />
-                      </div>
-                      <span className={`text-[10px] font-data font-bold ${style.text}`}>
-                        {val.toFixed(0)}{isBreakdown ? '/25' : '%'}
-                      </span>
-                    </div>
+            <div className="pt-3 space-y-4 border-t border-white/5">
+              {/* Levels Row */}
+              <div className="grid grid-cols-3 gap-2 py-2 border-b border-white/5">
+                {[
+                  { label: 'Entry', value: signal.entry_zone, color: 'text-apex-cyan' },
+                  { label: 'Stop', value: signal.stop_loss, color: 'text-apex-loss' },
+                  { label: 'Target', value: signal.price_target, color: 'text-apex-profit' }
+                ].map((item, idx) => (
+                  <div key={idx} className="flex flex-col">
+                    <span className="text-[8px] text-white/30 uppercase tracking-widest">{item.label}</span>
+                    <span className={`text-[10px] font-bold truncate ${item.color}`}>{item.value || 'N/A'}</span>
                   </div>
-                );
-              })}
+                ))}
+              </div>
+
+              {/* Confidence Breakdown */}
+              <div className="space-y-1.5">
+                {[
+                  { label: 'Trend Alignment', key: 'trend_alignment' },
+                  { label: 'Momentum Strength', key: 'momentum_strength' },
+                  { label: 'Volume Confirmation', key: 'volume_confirmation' },
+                  { label: 'Risk/Reward Ratio', key: 'risk_reward_ratio' }
+                ].map((item) => {
+                  const val = signal.confidence_breakdown?.[item.key] || 0;
+                  const pct = (val / 25) * 100;
+                  return (
+                    <div key={item.key} className="flex items-center justify-between">
+                      <span className="text-white/40 text-[9px] font-data uppercase tracking-wider">{item.label}</span>
+                      <div className="flex items-center gap-2">
+                        <div className="w-12 h-0.5 bg-white/5 overflow-hidden">
+                          <div className={`h-full ${style.badge.split(' ')[0]}`} style={{ width: `${pct}%` }} />
+                        </div>
+                        <span className={`text-[9px] font-data font-bold ${style.text}`}>{val.toFixed(0)}/25</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Invalidation */}
+              {signal.invalidation && (
+                <div className="p-2 bg-apex-warning/5 border-l-2 border-apex-warning">
+                  <p className="text-apex-warning text-[8px] font-data font-bold uppercase tracking-widest mb-1">Signal fails if:</p>
+                  <p className="text-[10px] text-white/70 italic leading-snug">{signal.invalidation}</p>
+                </div>
+              )}
+
+              {/* Earnings Warning */}
+              {signal.confidence_breakdown?.earnings_proximity_penalty && (
+                <div className="flex items-center gap-2 text-apex-loss text-[8px] font-data uppercase tracking-widest bg-apex-loss/10 px-2 py-1 border border-apex-loss/20 w-fit">
+                  <span>⚠ Earnings Imminent — adjusted -15</span>
+                </div>
+              )}
             </div>
           </motion.div>
         )}
