@@ -8,8 +8,8 @@ export default {
   theme: {
     extend: {
       fontFamily: {
-        display: ['Space Grotesk', 'sans-serif'],
-        data: ['JetBrains Mono', 'monospace'],
+        display: ['Orbitron', 'Space Grotesk', 'sans-serif'],
+        data: ['Share Tech Mono', 'JetBrains Mono', 'monospace'],
         sans: ['Inter', 'system-ui', 'sans-serif'],
       },
       colors: {

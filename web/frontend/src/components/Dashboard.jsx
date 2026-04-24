@@ -2,8 +2,8 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
-  TrendingUp, TrendingDown, Eye, ChevronDown, ChevronUp,
-  Activity, Cpu, BarChart3, Shield, Zap, X, Plus, RefreshCw, ExternalLink
+  Activity, Cpu, BarChart3, Zap, Plus, ExternalLink,
+  RefreshCw, WifiOff, Calculator, History,
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { api } from '../api'
@@ -12,363 +12,131 @@ import PageWrapper from './PageWrapper'
 import GlitchText from './GlitchText'
 import SkeletonLoader from './SkeletonLoader'
 import TradingViewChart from './TradingViewChart'
-import { Calculator, History } from 'lucide-react'
+import SignalCard from './ui/SignalCard'
+import ConfidenceBar from './ui/ConfidenceBar'
+import VerdictBadge from './ui/VerdictBadge'
+import IndicatorPill from './ui/IndicatorPill'
 
 const easing = [0.16, 1, 0.3, 1]
+const MAX_WATCHLIST = 20
 
-const VERDICT_STYLES = {
-  buy: {
-    bg: 'bg-apex-profit/10',
-    border: 'border-apex-profit/40',
-    text: 'text-apex-profit',
-    badge: 'bg-apex-profit text-black',
-    glow: 'shadow-[0_0_20px_rgba(0,255,136,0.15)]',
-    icon: TrendingUp,
-  },
-  strong_buy: {
-    bg: 'bg-emerald-400/10',
-    border: 'border-emerald-400/50',
-    text: 'text-emerald-300',
-    badge: 'bg-emerald-400 text-black font-black uppercase tracking-widest',
-    glow: 'shadow-[0_0_30px_rgba(52,211,153,0.3)]',
-    icon: Zap,
-  },
-  watch: {
-    bg: 'bg-apex-warning/10',
-    border: 'border-apex-warning/40',
-    text: 'text-apex-warning',
-    badge: 'bg-apex-warning text-black',
-    glow: 'shadow-[0_0_20px_rgba(255,200,0,0.15)]',
-    icon: Eye,
-  },
-  avoid: {
-    bg: 'bg-orange-500/10',
-    border: 'border-orange-500/40',
-    text: 'text-orange-400',
-    badge: 'bg-orange-500 text-white',
-    glow: 'shadow-[0_0_20px_rgba(249,115,22,0.15)]',
-    icon: TrendingDown,
-  },
-  strong_avoid: {
-    bg: 'bg-apex-loss/20',
-    border: 'border-apex-loss/60',
-    text: 'text-apex-loss',
-    badge: 'bg-apex-loss text-white font-black uppercase tracking-widest',
-    glow: 'shadow-[0_0_30px_rgba(255,0,85,0.3)]',
-    icon: Shield,
-  },
+const VERDICT_COLOR = {
+  STRONG_BUY:   '#34D399',
+  BUY:          '#00FF88',
+  WATCH:        '#FFEA00',
+  AVOID:        '#F97316',
+  STRONG_AVOID: '#FF0055',
 }
 
 function getConfidencePct(signal) {
-  const c = signal.confidence
-  if (c === undefined || c === null) return 0
+  const c = signal?.confidence
+  if (c == null) return 0
   return c > 1 ? c : c * 100
-}
-
-function minutesAgo(isoStr) {
-  if (!isoStr) return null
-  const diff = Math.floor((Date.now() - new Date(isoStr).getTime()) / 60000)
-  if (diff < 1) return 'just now'
-  return `${diff}m ago`
 }
 
 function SignalCardSkeleton() {
   return (
-    <div className="cyber-panel p-5 border border-white/10 bg-black/40 space-y-3 animate-pulse">
+    <div className="p-4 space-y-3 animate-pulse" style={{ border: '1px solid rgba(255,255,255,0.06)' }}>
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <SkeletonLoader width={64} height={22} />
-          <SkeletonLoader width={48} height={16} />
+        <div className="flex items-center gap-2">
+          <SkeletonLoader width={56} height={20} />
+          <SkeletonLoader width={44} height={16} />
         </div>
-        <SkeletonLoader width={20} height={20} />
+        <SkeletonLoader width={18} height={18} />
       </div>
-      <SkeletonLoader height={14} width="55%" />
-      <div className="space-y-1">
-        <SkeletonLoader height={8} />
-        <SkeletonLoader height={4} />
-      </div>
-      <SkeletonLoader height={30} />
-      <SkeletonLoader height={12} width="70%" />
+      <SkeletonLoader height={12} width="55%" />
+      <SkeletonLoader height={2} />
+      <SkeletonLoader height={28} />
+      <SkeletonLoader height={10} width="65%" />
     </div>
-  )
-}
-
-function SignalCard({ signal, isSelected, onSelect, onExpandReasoning, onRemove, onRefresh, isRefreshing, inCooldown }) {
-  const [expanded, setExpanded] = useState(false)
-  const style = VERDICT_STYLES[signal.verdict?.toLowerCase()] || VERDICT_STYLES.watch
-  const Icon = style.icon
-  const confidencePct = getConfidencePct(signal)
-  const updated = minutesAgo(signal.generated_at)
-
-  const handleExpand = (e) => {
-    e.stopPropagation()
-    setExpanded(!expanded)
-    if (!expanded) onExpandReasoning?.(signal.symbol)
-  }
-
-  return (
-    <motion.div
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.5, ease: easing }}
-      onClick={() => onSelect(signal.symbol)}
-      className={`relative cyber-panel p-5 cursor-pointer transition-all duration-300 group overflow-hidden ${
-        isSelected
-          ? `${style.border} border-2 ${style.glow} ${style.bg}`
-          : 'border border-white/10 hover:border-white/20 bg-black/40'
-      }`}
-    >
-      <div className="absolute top-0 left-0 w-2 h-2 border-t border-l border-white/20" />
-      <div className="absolute top-0 right-0 w-2 h-2 border-t border-r border-white/20" />
-
-      {/* Header */}
-      <div className="flex items-center justify-between mb-3">
-        <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-lg font-display font-black text-white tracking-tight">{signal.symbol}</span>
-          <span className={`px-2.5 py-0.5 text-[10px] font-data font-bold uppercase tracking-widest ${style.badge}`}>
-            {signal.verdict}
-          </span>
-          <span className="text-[9px] text-white/30 font-data border border-white/10 px-1.5 py-0.5 uppercase">
-            1-3d outlook
-          </span>
-        </div>
-        <div className="flex items-center gap-2 shrink-0">
-          <Icon size={16} className={style.text} />
-          {onRemove && (
-            <button
-              onClick={(e) => { e.stopPropagation(); onRemove(signal.symbol) }}
-              className="text-white/20 hover:text-apex-loss transition-colors ml-1"
-              title={`Remove ${signal.symbol}`}
-              aria-label={`Remove ${signal.symbol}`}
-            >
-              <X size={13} />
-            </button>
-          )}
-        </div>
-      </div>
-
-      {/* Price */}
-      <div className="flex items-baseline gap-3 mb-3">
-        {signal.price > 0 && (
-          <span className="text-white font-data text-sm font-bold">
-            ${signal.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-          </span>
-        )}
-        <span className={`text-xs font-data font-bold ${signal.regime_conflict ? 'text-apex-warning' : 'text-apex-profit'}`}>
-          {signal.regime_conflict ? 'Regime Conflict' : 'Trend Aligned'}
-        </span>
-      </div>
-
-      {/* Confidence */}
-      <div className="mb-3">
-        <div className="flex justify-between items-center mb-1">
-          <div className="flex flex-col">
-            <span className="text-white/40 text-[10px] font-data uppercase tracking-widest">Confidence</span>
-            <span className="text-[8px] text-white/30 truncate max-w-[140px]">{signal.calibrated_label}</span>
-          </div>
-          <span className={`text-xs font-data font-bold ${style.text}`}>{confidencePct.toFixed(0)}%</span>
-        </div>
-        <div className="h-1 bg-white/10 w-full overflow-hidden">
-          <motion.div
-            initial={{ width: 0 }}
-            animate={{ width: `${confidencePct}%` }}
-            transition={{ duration: 1, delay: 0.3 }}
-            className={`h-full ${style.badge.split(' ')[0]}`}
-          />
-        </div>
-      </div>
-
-      {/* Reasoning */}
-      <p className="text-white/80 text-[11px] font-body leading-relaxed line-clamp-2 mb-2">
-        {signal.reasoning}
-      </p>
-
-      {/* Key indicator pills — always visible */}
-      {(signal.key_indicators || []).length > 0 && (
-        <div className="flex flex-wrap gap-1 mb-3">
-          {signal.key_indicators.slice(0, 3).map((ind, idx) => (
-            <span key={idx} className="px-2 py-0.5 bg-white/5 border border-white/10 text-white/45 text-[9px] font-data truncate max-w-[160px]">
-              {ind}
-            </span>
-          ))}
-        </div>
-      )}
-
-      {/* Last updated + Refresh */}
-      <div className="flex items-center justify-between pt-2 border-t border-white/5">
-        <span className="text-[9px] text-white/25 font-data">
-          {updated ? `Last updated: ${updated}` : ''}
-        </span>
-        <button
-          onClick={(e) => { e.stopPropagation(); onRefresh?.(signal.symbol) }}
-          disabled={inCooldown || isRefreshing}
-          className="flex items-center gap-1 text-[9px] font-data uppercase tracking-widest text-white/30 hover:text-apex-accent disabled:text-white/15 disabled:cursor-not-allowed transition-colors"
-          title="Force refresh (bypasses 15-min cache)"
-        >
-          <RefreshCw size={10} className={isRefreshing ? 'animate-spin' : ''} />
-          {isRefreshing ? 'Refreshing' : inCooldown ? 'Wait 60s' : 'Refresh'}
-        </button>
-      </div>
-
-      {/* Expandable details */}
-      <button
-        onClick={handleExpand}
-        className={`flex items-center gap-2 text-[11px] font-data uppercase tracking-widest transition-colors w-full justify-between py-2 border-t border-white/5 mt-2 ${
-          expanded ? style.text : 'text-white/40 hover:text-white/60'
-        }`}
-      >
-        <span className="flex items-center gap-1.5">
-          <Shield size={12} />
-          Details & Indicators
-        </span>
-        {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-      </button>
-
-      <AnimatePresence>
-        {expanded && (
-          <motion.div
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: 'auto', opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.3 }}
-            className="overflow-hidden"
-          >
-            <div className="pt-3 space-y-4 border-t border-white/5">
-              <div className="grid grid-cols-2 gap-3">
-                <div className="p-2 bg-apex-profit/5 border border-apex-profit/10">
-                  <span className="text-[8px] text-apex-profit uppercase font-data font-bold block mb-1">Bull Case</span>
-                  <p className="text-[9px] text-white/60 leading-tight">{signal.bull_case}</p>
-                </div>
-                <div className="p-2 bg-apex-loss/5 border border-apex-loss/10">
-                  <span className="text-[8px] text-apex-loss uppercase font-data font-bold block mb-1">Bear Case</span>
-                  <p className="text-[9px] text-white/60 leading-tight">{signal.bear_case}</p>
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <span className="text-[8px] text-white/30 uppercase tracking-[0.2em] font-data">All Key Signals</span>
-                <div className="flex flex-wrap gap-1.5">
-                  {(signal.key_indicators || []).map((ind, idx) => (
-                    <span key={idx} className="px-2 py-0.5 bg-white/5 border border-white/10 text-white/50 text-[9px] font-data truncate max-w-[150px]">
-                      {ind}
-                    </span>
-                  ))}
-                </div>
-              </div>
-
-              {signal.indicators_snapshot && (
-                <div className="grid grid-cols-2 gap-2 text-[8px] font-data text-white/40 uppercase tracking-widest pt-2 border-t border-white/5">
-                  <div className="flex justify-between">
-                    <span>RSI</span>
-                    <span className="text-white">{signal.indicators_snapshot.rsi?.value?.toFixed(1)}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span>MACD</span>
-                    <span className="text-white">{signal.indicators_snapshot.macd?.histogram?.toFixed(3)}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span>Vol Ratio</span>
-                    <span className="text-white">{signal.indicators_snapshot.volume_ratio?.toFixed(2)}x</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span>52w High</span>
-                    <span className="text-white">{(signal.indicators_snapshot.range_52w?.dist_from_high_pct)?.toFixed(1)}%</span>
-                  </div>
-                </div>
-              )}
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </motion.div>
   )
 }
 
 function PositionCalculator({ price, stopLoss }) {
   const [accountSize, setAccountSize] = useState(100000)
-  const [riskPct, setRiskPct] = useState(2)
+  const [riskPct, setRiskPct]         = useState(2)
 
-  const stopPrice = parseFloat(stopLoss?.split(' ')[0]) || (price * 0.95)
+  const stopPrice  = parseFloat(stopLoss?.split(' ')[0]) || (price * 0.95)
   const riskAmount = accountSize * (riskPct / 100)
-  const priceRisk = Math.abs(price - stopPrice)
-  const shares = priceRisk > 0 ? Math.floor(riskAmount / priceRisk) : 0
-  const totalCost = shares * price
+  const priceRisk  = Math.abs(price - stopPrice)
+  const shares     = priceRisk > 0 ? Math.floor(riskAmount / priceRisk) : 0
+  const totalCost  = shares * price
+
+  const inputStyle = {
+    background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.10)',
+    padding: '8px 10px', color: '#FFFFFF',
+    fontFamily: 'var(--font-data, monospace)', fontSize: '12px',
+    width: '100%', outline: 'none',
+  }
+
+  const labelStyle = {
+    fontFamily: 'var(--font-data, monospace)', fontSize: '9px',
+    color: 'rgba(255,255,255,0.30)', textTransform: 'uppercase',
+    letterSpacing: '0.12em', display: 'block', marginBottom: '4px',
+  }
 
   return (
-    <div className="cyber-panel p-6 bg-apex-accent/5 border border-apex-accent/20">
+    <div className="p-5" style={{ background: 'rgba(204,255,0,0.03)', border: '1px solid rgba(204,255,0,0.12)' }}>
       <div className="flex items-center gap-2 mb-4">
-        <Calculator size={16} className="text-apex-accent" />
-        <h4 className="text-[10px] font-data uppercase tracking-[0.3em] text-white/60">Position Sizing Calculator (2% Rule)</h4>
+        <Calculator size={14} className="text-apex-accent" />
+        <span style={{ fontFamily: 'var(--font-data, monospace)', fontSize: '9px', letterSpacing: '0.20em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.45)' }}>
+          Position Sizing — 2% Rule
+        </span>
       </div>
-      <div className="grid grid-cols-2 gap-6">
-        <div className="space-y-4">
+      <div className="grid grid-cols-2 gap-5">
+        <div className="space-y-3">
           <div>
-            <label className="text-[9px] text-white/30 uppercase tracking-widest block mb-1">Account Size ($)</label>
-            <input
-              type="number"
-              value={accountSize}
-              onChange={(e) => setAccountSize(e.target.value)}
-              className="bg-black/40 border border-white/10 p-2 text-white font-data text-xs w-full focus:border-apex-accent outline-none"
-            />
+            <label style={labelStyle}>Account Size ($)</label>
+            <input type="number" value={accountSize} onChange={e => setAccountSize(+e.target.value)} style={inputStyle} />
           </div>
           <div>
-            <label className="text-[9px] text-white/30 uppercase tracking-widest block mb-1">Risk per Trade (%)</label>
-            <input
-              type="number"
-              value={riskPct}
-              onChange={(e) => setRiskPct(e.target.value)}
-              className="bg-black/40 border border-white/10 p-2 text-white font-data text-xs w-full focus:border-apex-accent outline-none"
-            />
+            <label style={labelStyle}>Risk per Trade (%)</label>
+            <input type="number" value={riskPct} onChange={e => setRiskPct(+e.target.value)} style={inputStyle} />
           </div>
         </div>
-        <div className="bg-black/60 p-4 border border-white/5 space-y-3">
-          <div className="flex justify-between">
-            <span className="text-[10px] text-white/40 uppercase tracking-tighter">Recommended Shares</span>
-            <span className="text-apex-accent font-data font-bold text-sm tracking-widest">{shares.toLocaleString()}</span>
-          </div>
-          <div className="flex justify-between">
-            <span className="text-[10px] text-white/40 uppercase tracking-tighter">Position Notional</span>
-            <span className="text-white font-data text-sm tracking-widest">${totalCost.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
-          </div>
-          <div className="flex justify-between">
-            <span className="text-[10px] text-white/40 uppercase tracking-tighter">Max Risk ($)</span>
-            <span className="text-apex-loss font-data font-bold text-sm tracking-widest">${riskAmount.toLocaleString()}</span>
-          </div>
-          <div className="mt-2 pt-2 border-t border-white/5 text-[9px] text-white/20 italic leading-snug">
-            Calculated based on stop loss at ${stopPrice.toFixed(2)}. Always respect your stops.
-          </div>
+        <div className="p-4 space-y-3" style={{ background: 'rgba(0,0,0,0.50)', border: '1px solid rgba(255,255,255,0.06)' }}>
+          {[
+            { l: 'Recommended Shares', v: shares.toLocaleString(), c: '#CCFF00'   },
+            { l: 'Position Notional',  v: `$${totalCost.toLocaleString(undefined, { maximumFractionDigits: 0 })}`, c: 'rgba(255,255,255,0.85)' },
+            { l: 'Max Risk ($)',       v: `$${riskAmount.toLocaleString()}`, c: '#FF0055' },
+          ].map(({ l, v, c }) => (
+            <div key={l} className="flex justify-between items-center">
+              <span style={{ fontFamily: 'var(--font-data, monospace)', fontSize: '9px', color: 'rgba(255,255,255,0.35)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>{l}</span>
+              <span style={{ fontFamily: 'var(--font-data, monospace)', fontSize: '13px', fontWeight: 700, color: c }}>{v}</span>
+            </div>
+          ))}
+          <p style={{ fontFamily: 'var(--font-body)', fontSize: '8px', color: 'rgba(255,255,255,0.18)', marginTop: '6px', paddingTop: '6px', borderTop: '1px solid rgba(255,255,255,0.05)', lineHeight: 1.4 }}>
+            Stop at ${stopPrice.toFixed(2)}. Always respect your stops.
+          </p>
         </div>
       </div>
     </div>
   )
 }
 
-const MAX_WATCHLIST = 20
-
 export default function Dashboard() {
   const { user } = useAuth()
-  const [signals, setSignals] = useState([])
-  const [watchlist, setWatchlist] = useState([])
-  const [selectedSymbol, setSelectedSymbol] = useState('AAPL')
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState(null)
-  const [addInput, setAddInput] = useState('')
-  const [addError, setAddError] = useState('')
-  const [addLoading, setAddLoading] = useState(false)
-  const [refreshCooldowns, setRefreshCooldowns] = useState(new Set())
-  const [refreshingSymbols, setRefreshingSymbols] = useState(new Set())
   const navigate = useNavigate()
+
+  const [signals,          setSignals]          = useState([])
+  const [watchlist,        setWatchlist]        = useState([])
+  const [selectedSymbol,   setSelectedSymbol]   = useState('AAPL')
+  const [loading,          setLoading]          = useState(true)
+  const [error,            setError]            = useState(null)
+  const [addInput,         setAddInput]         = useState('')
+  const [addError,         setAddError]         = useState('')
+  const [addLoading,       setAddLoading]       = useState(false)
+  const [refreshCooldowns, setRefreshCooldowns] = useState(new Set())
+  const [refreshingSymbols,setRefreshingSymbols]= useState(new Set())
   const addInputRef = useRef(null)
 
   const loadSignalsForSymbols = useCallback(async (symbols) => {
-    if (!symbols || symbols.length === 0) return
+    if (!symbols?.length) return
     setLoading(true)
     try {
       const res = await api.getBatchSignals(symbols)
       setSignals(res.signals || [])
-      if (user?.email) {
-        api.logEvent(user.email, symbols[0], 'view_signal').catch(() => {})
-      }
+      if (user?.email) api.logEvent(user.email, symbols[0], 'view_signal').catch(() => {})
     } catch (e) {
       setError(e.message)
     } finally {
@@ -378,7 +146,6 @@ export default function Dashboard() {
 
   useEffect(() => {
     if (user) {
-      // Authenticated: load from backend watchlist
       api.getWatchlists()
         .then((res) => {
           const wl = res.watchlists?.default || []
@@ -388,20 +155,16 @@ export default function Dashboard() {
           return loadSignalsForSymbols(syms)
         })
         .catch(() => {
-          // Fallback to MVP if watchlist fetch fails
           api.getMvpSignals()
             .then((r) => setSignals(r.signals || []))
             .catch((e) => setError(e.message))
             .finally(() => setLoading(false))
         })
     } else {
-      // Unauthenticated: load 10 MVP symbols
       api.getMvpSignals()
         .then((res) => {
           setSignals(res.signals || [])
-          if (user?.email) {
-            api.logEvent(user.email, 'AAPL', 'view_signal').catch(() => {})
-          }
+          if (user?.email) api.logEvent(user.email, 'AAPL', 'view_signal').catch(() => {})
         })
         .catch((e) => setError(e.message))
         .finally(() => setLoading(false))
@@ -410,31 +173,27 @@ export default function Dashboard() {
 
   const handleSelect = useCallback((symbol) => {
     setSelectedSymbol(symbol)
-    if (user?.email) {
-      api.logEvent(user.email, symbol, 'view_signal').catch(() => {})
-    }
+    if (user?.email) api.logEvent(user.email, symbol, 'view_signal').catch(() => {})
   }, [user])
 
   const handleExpandReasoning = useCallback((symbol) => {
-    if (user?.email) {
-      api.logEvent(user.email, symbol, 'view_reasoning').catch(() => {})
-    }
+    if (user?.email) api.logEvent(user.email, symbol, 'view_reasoning').catch(() => {})
   }, [user])
 
   const handleRefresh = useCallback(async (symbol) => {
     if (refreshCooldowns.has(symbol) || refreshingSymbols.has(symbol)) return
-    setRefreshingSymbols((prev) => new Set([...prev, symbol]))
+    setRefreshingSymbols(prev => new Set([...prev, symbol]))
     try {
       const newSignal = await api.refreshSignal(symbol)
-      setSignals((prev) => prev.map((s) => s.symbol === symbol ? newSignal : s))
-      toast.success(`${symbol} signal refreshed`)
+      setSignals(prev => prev.map(s => s.symbol === symbol ? newSignal : s))
+      toast.success(`${symbol} refreshed`)
     } catch (e) {
       toast.error(`Refresh failed: ${e.message}`)
     } finally {
-      setRefreshingSymbols((prev) => { const n = new Set(prev); n.delete(symbol); return n })
-      setRefreshCooldowns((prev) => new Set([...prev, symbol]))
+      setRefreshingSymbols(prev => { const n = new Set(prev); n.delete(symbol); return n })
+      setRefreshCooldowns(prev => new Set([...prev, symbol]))
       setTimeout(() => {
-        setRefreshCooldowns((prev) => { const n = new Set(prev); n.delete(symbol); return n })
+        setRefreshCooldowns(prev => { const n = new Set(prev); n.delete(symbol); return n })
       }, 60000)
     }
   }, [refreshCooldowns, refreshingSymbols])
@@ -442,34 +201,23 @@ export default function Dashboard() {
   const handleAddSymbol = async () => {
     const sym = addInput.trim().toUpperCase()
     if (!sym) return
-    if (watchlist.length >= MAX_WATCHLIST) {
-      setAddError(`${MAX_WATCHLIST} symbol limit reached`)
-      return
-    }
-    if (watchlist.includes(sym)) {
-      setAddError(`${sym} is already in your watchlist`)
-      return
-    }
+    if (watchlist.length >= MAX_WATCHLIST) { setAddError(`${MAX_WATCHLIST} symbol limit reached`); return }
+    if (watchlist.includes(sym))            { setAddError(`${sym} already in watchlist`); return }
     setAddLoading(true)
     setAddError('')
     try {
       const quote = await api.getQuote(sym)
-      if (!quote || !quote.price || quote.price === 0) {
-        setAddError('Symbol not found — check the ticker and try again')
-        setAddLoading(false)
-        return
-      }
+      if (!quote?.price || quote.price === 0) { setAddError('Symbol not found — check ticker'); setAddLoading(false); return }
       await api.addToWatchlist('default', sym)
       const newWl = [...watchlist, sym]
       setWatchlist(newWl)
       setAddInput('')
-      // Load signal for new symbol
       const newSignal = await api.getSignal(sym)
-      setSignals((prev) => [...prev, newSignal])
+      setSignals(prev => [...prev, newSignal])
       setSelectedSymbol(sym)
-      toast.success(`${sym} added to watchlist`)
-    } catch (e) {
-      setAddError('Symbol not found — check the ticker and try again')
+      toast.success(`${sym} added`)
+    } catch {
+      setAddError('Symbol not found — check ticker')
     } finally {
       setAddLoading(false)
     }
@@ -478,23 +226,26 @@ export default function Dashboard() {
   const handleRemoveSymbol = useCallback(async (symbol) => {
     try {
       await api.removeFromWatchlist('default', symbol)
-      const newWl = watchlist.filter((s) => s !== symbol)
+      const newWl = watchlist.filter(s => s !== symbol)
       setWatchlist(newWl)
-      setSignals((prev) => prev.filter((s) => s.symbol !== symbol))
+      setSignals(prev => prev.filter(s => s.symbol !== symbol))
       if (selectedSymbol === symbol) {
-        const remaining = signals.filter((s) => s.symbol !== symbol)
+        const remaining = signals.filter(s => s.symbol !== symbol)
         setSelectedSymbol(remaining[0]?.symbol || '')
       }
-    } catch (e) {
+    } catch {
       toast.error(`Failed to remove ${symbol}`)
     }
   }, [watchlist, signals, selectedSymbol])
 
-  const selectedSignal = signals.find((s) => s.symbol === selectedSymbol) || signals[0]
+  const selectedSignal       = signals.find(s => s.symbol === selectedSymbol) || signals[0]
   const selectedConfidencePct = selectedSignal ? getConfidencePct(selectedSignal) : 0
+  const verdictKey           = (selectedSignal?.verdict || 'watch').toUpperCase()
+  const selectedColor        = VERDICT_COLOR[verdictKey] || '#CCFF00'
 
   const verdictCounts = signals.reduce((acc, s) => {
-    acc[s.verdict] = (acc[s.verdict] || 0) + 1
+    const v = (s.verdict || 'WATCH').toUpperCase()
+    acc[v] = (acc[v] || 0) + 1
     return acc
   }, {})
 
@@ -502,11 +253,9 @@ export default function Dashboard() {
     return (
       <PageWrapper>
         <div className="space-y-8">
-          <div className="h-16 w-1/3 skeleton rounded-none border border-white/10" />
+          <SkeletonLoader height={64} width="35%" />
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {[1, 2, 3, 4, 5, 6].map((i) => (
-              <SignalCardSkeleton key={i} />
-            ))}
+            {[1,2,3,4,5,6].map(i => <SignalCardSkeleton key={i} />)}
           </div>
         </div>
       </PageWrapper>
@@ -517,44 +266,53 @@ export default function Dashboard() {
     <PageWrapper className="relative min-h-screen">
       <div className="space-y-10 relative z-10 mt-4 mb-24">
 
-        {/* Hero Header */}
+        {/* ── Hero header ── */}
         <motion.div
-          initial={{ opacity: 0, scale: 0.97 }}
-          animate={{ opacity: 1, scale: 1 }}
-          transition={{ duration: 0.6, ease: easing }}
-          className="relative cyber-panel border-l-[6px] border-l-apex-accent p-8 md:p-10 overflow-hidden"
+          initial={{ opacity: 0, y: 16 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.55, ease: easing }}
+          className="relative overflow-hidden p-7 md:p-10"
+          style={{
+            background: 'rgba(255,255,255,0.015)',
+            border: '1px solid rgba(255,255,255,0.07)',
+            borderLeft: '4px solid #CCFF00',
+          }}
         >
-          <div className="absolute inset-0 bg-gradient-to-br from-apex-accent/5 via-transparent to-apex-pink/5 opacity-50 pointer-events-none" />
-          <div className="absolute -right-16 -top-16 text-[16rem] text-apex-accent/5 font-black font-display rotate-12 pointer-events-none">
+          <div className="absolute inset-0 bg-gradient-to-br from-apex-accent/4 via-transparent to-transparent pointer-events-none" />
+          <div className="absolute -right-10 -top-10 text-[14rem] font-black text-apex-accent/[0.04] pointer-events-none select-none" style={{ fontFamily: 'var(--font-display, sans-serif)' }}>
             AI
           </div>
 
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-6 relative z-10">
             <div>
-              <div className="flex items-center gap-3 mb-3">
-                <Cpu size={18} className="text-apex-accent animate-pulse" />
-                <p className="text-apex-cyan text-xs uppercase font-data tracking-[0.3em] font-bold">Signal Hub // MVP</p>
+              <div className="flex items-center gap-2 mb-3">
+                <Cpu size={16} className="text-apex-accent animate-pulse" />
+                <span style={{ fontFamily: 'var(--font-data, monospace)', fontSize: '10px', letterSpacing: '0.22em', textTransform: 'uppercase', color: '#00F0FF', fontWeight: 700 }}>
+                  Signal Hub
+                </span>
               </div>
-              <GlitchText as="h1" text="AI Signal Hub" className="text-4xl md:text-5xl font-display font-black tracking-tighter leading-[0.9] text-white" />
-              <p className="text-white/40 text-xs font-data uppercase tracking-widest mt-4 border-l pl-3 border-white/20">
-                AI-scored trade signals. Updated daily. 1-3 day directional window.
+              <GlitchText as="h1" text="AI Signal Hub" className="text-4xl md:text-5xl font-display font-black tracking-tighter leading-none text-white" />
+              <p style={{ fontFamily: 'var(--font-data, monospace)', fontSize: '10px', letterSpacing: '0.14em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.35)', marginTop: '14px', borderLeft: '2px solid rgba(255,255,255,0.15)', paddingLeft: '10px' }}>
+                AI-scored signals · daily cadence · 1-3 day directional window
               </p>
               <Link
                 to="/track-record"
-                className="inline-flex items-center gap-1.5 mt-3 text-[11px] font-data text-apex-profit/70 hover:text-apex-profit transition-colors"
+                className="inline-flex items-center gap-1.5 mt-3 transition-colors"
+                style={{ fontFamily: 'var(--font-data, monospace)', fontSize: '10px', letterSpacing: '0.08em', color: 'rgba(0,255,136,0.60)' }}
               >
-                <ExternalLink size={11} />
-                See how ADE has performed →
+                <ExternalLink size={10} />
+                See ADE's track record →
               </Link>
             </div>
 
-            <div className="flex gap-4">
+            {/* Verdict count chips */}
+            <div className="flex gap-3 flex-wrap">
               {Object.entries(verdictCounts).map(([verdict, count]) => {
-                const s = VERDICT_STYLES[verdict?.toLowerCase()] || VERDICT_STYLES.watch
+                const c = VERDICT_COLOR[verdict] || '#CCFF00'
                 return (
-                  <div key={verdict} className={`px-4 py-3 border ${s.border} ${s.bg} min-w-[80px] text-center`}>
-                    <p className={`text-2xl font-display font-black ${s.text}`}>{count}</p>
-                    <p className="text-white/40 text-[10px] font-data uppercase tracking-widest mt-1">{verdict}</p>
+                  <div key={verdict} className="text-center px-4 py-2.5 min-w-[64px]" style={{ border: `1px solid ${c}28`, background: `${c}0A` }}>
+                    <p style={{ fontFamily: 'var(--font-display, sans-serif)', fontSize: '22px', fontWeight: 900, color: c, lineHeight: 1 }}>{count}</p>
+                    <p style={{ fontFamily: 'var(--font-data, monospace)', fontSize: '8px', color: 'rgba(255,255,255,0.35)', textTransform: 'uppercase', letterSpacing: '0.12em', marginTop: '3px' }}>{verdict}</p>
                   </div>
                 )
               })}
@@ -562,26 +320,43 @@ export default function Dashboard() {
           </div>
         </motion.div>
 
-        {error && (
-          <div className="p-4 bg-apex-loss/15 border border-apex-loss/30 text-apex-loss text-sm font-data">
-            {error}
-          </div>
-        )}
+        {/* ── Offline / error banner ── */}
+        <AnimatePresence>
+          {error && (
+            <motion.div
+              initial={{ opacity: 0, y: -8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -8 }}
+              className="flex items-center gap-3 p-4"
+              style={{ background: 'rgba(255,0,85,0.08)', border: '1px solid rgba(255,0,85,0.25)' }}
+            >
+              <WifiOff size={16} style={{ color: '#FF0055', flexShrink: 0 }} />
+              <p style={{ fontFamily: 'var(--font-data, monospace)', fontSize: '11px', color: 'rgba(255,0,85,0.80)', letterSpacing: '0.04em' }}>
+                {error}
+              </p>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
-        {/* Main content */}
+        {/* ── Main layout ── */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
 
           {/* Signal cards column */}
           <div className="lg:col-span-1 space-y-4">
-            <div className="flex items-center gap-2 mb-2">
-              <Zap size={14} className="text-apex-accent" />
-              <h2 className="text-xs font-data uppercase tracking-[0.2em] text-white/50">Watchlist Signals</h2>
+            {/* Column header + watchlist count */}
+            <div className="flex items-center gap-2 mb-1">
+              <Zap size={13} className="text-apex-accent" />
+              <h2 style={{ fontFamily: 'var(--font-data, monospace)', fontSize: '10px', letterSpacing: '0.18em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.40)' }}>
+                Watchlist Signals
+              </h2>
               {user && watchlist.length > 0 && (
-                <span className="text-[9px] text-white/25 font-data ml-auto">{watchlist.length}/{MAX_WATCHLIST}</span>
+                <span className="ml-auto" style={{ fontFamily: 'var(--font-data, monospace)', fontSize: '9px', color: 'rgba(255,255,255,0.22)' }}>
+                  {watchlist.length}/{MAX_WATCHLIST}
+                </span>
               )}
             </div>
 
-            {/* Add symbol input — authenticated users only */}
+            {/* Add symbol — authenticated only */}
             {user && (
               <div className="space-y-1">
                 <div className="flex gap-2">
@@ -594,207 +369,223 @@ export default function Dashboard() {
                     placeholder="Add symbol (e.g. AAPL)"
                     maxLength={10}
                     disabled={watchlist.length >= MAX_WATCHLIST || addLoading}
-                    className="flex-1 bg-black/40 border border-white/10 focus:border-apex-accent/50 outline-none text-white font-data text-xs px-3 py-2 placeholder-white/20 disabled:opacity-40"
+                    className="flex-1 outline-none placeholder-white/20 disabled:opacity-40"
+                    style={{
+                      background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.10)',
+                      color: '#FFFFFF', fontFamily: 'var(--font-data, monospace)', fontSize: '11px',
+                      padding: '8px 12px',
+                    }}
                   />
                   <button
                     onClick={handleAddSymbol}
                     disabled={!addInput.trim() || addLoading || watchlist.length >= MAX_WATCHLIST}
-                    className="px-3 py-2 bg-apex-accent/10 hover:bg-apex-accent/20 border border-apex-accent/30 text-apex-accent disabled:opacity-30 disabled:cursor-not-allowed transition-all"
+                    className="flex items-center justify-center px-3 transition-all disabled:opacity-30"
+                    style={{ background: 'rgba(204,255,0,0.08)', border: '1px solid rgba(204,255,0,0.25)', color: '#CCFF00' }}
                     aria-label="Add symbol"
                   >
                     <Plus size={14} className={addLoading ? 'animate-spin' : ''} />
                   </button>
                 </div>
                 {watchlist.length >= MAX_WATCHLIST && (
-                  <p className="text-[10px] text-apex-warning font-data">{MAX_WATCHLIST} symbol limit reached</p>
+                  <p style={{ fontFamily: 'var(--font-data, monospace)', fontSize: '9px', color: '#FFEA00' }}>Limit reached ({MAX_WATCHLIST})</p>
                 )}
                 {addError && (
-                  <p className="text-[10px] text-apex-loss font-data">{addError}</p>
+                  <p style={{ fontFamily: 'var(--font-data, monospace)', fontSize: '9px', color: '#FF0055' }}>{addError}</p>
                 )}
               </div>
             )}
 
-            <div className="space-y-3 max-h-[calc(100vh-280px)] overflow-y-auto pr-1 custom-scrollbar">
-              {loading && signals.length === 0
-                ? [1, 2, 3].map((i) => <SignalCardSkeleton key={i} />)
-                : signals.map((signal) => (
-                    <SignalCard
-                      key={signal.symbol}
-                      signal={signal}
-                      isSelected={signal.symbol === selectedSymbol}
-                      onSelect={handleSelect}
-                      onExpandReasoning={handleExpandReasoning}
-                      onRemove={user ? handleRemoveSymbol : null}
-                      onRefresh={handleRefresh}
-                      isRefreshing={refreshingSymbols.has(signal.symbol)}
-                      inCooldown={refreshCooldowns.has(signal.symbol)}
-                    />
-                  ))}
+            {/* Signal card list */}
+            <div className="space-y-2.5 max-h-[calc(100vh-300px)] overflow-y-auto pr-0.5">
+              <AnimatePresence>
+                {loading && signals.length === 0
+                  ? [1,2,3].map(i => <SignalCardSkeleton key={i} />)
+                  : signals.map((signal, i) => (
+                      <SignalCard
+                        key={signal.symbol}
+                        signal={signal}
+                        index={i}
+                        isSelected={signal.symbol === selectedSymbol}
+                        onSelect={handleSelect}
+                        onExpandReasoning={handleExpandReasoning}
+                        onRemove={user ? handleRemoveSymbol : null}
+                        onRefresh={handleRefresh}
+                        isRefreshing={refreshingSymbols.has(signal.symbol)}
+                        inCooldown={refreshCooldowns.has(signal.symbol)}
+                      />
+                    ))
+                }
+              </AnimatePresence>
             </div>
           </div>
 
           {/* Chart + detail column */}
           <div className="lg:col-span-2 space-y-6">
+
+            {/* Chart */}
             <motion.div
               key={selectedSymbol}
-              initial={{ opacity: 0, y: 10 }}
+              initial={{ opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.4 }}
-              className="cyber-panel border border-white/10 bg-black/60 overflow-hidden"
+              transition={{ duration: 0.35 }}
+              style={{ border: '1px solid rgba(255,255,255,0.08)', background: 'rgba(0,0,0,0.55)' }}
             >
-              <div className="flex items-center justify-between px-5 py-3 border-b border-white/10">
+              <div className="flex items-center justify-between px-5 py-3" style={{ borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
                 <div className="flex items-center gap-3">
-                  <BarChart3 size={16} className="text-apex-cyan" />
-                  <span className="text-white font-display font-bold text-lg">{selectedSymbol}</span>
-                  {selectedSignal && (
-                    <span className={`px-2 py-0.5 text-[10px] font-data font-bold uppercase tracking-widest ${VERDICT_STYLES[selectedSignal.verdict?.toLowerCase()]?.badge || ''}`}>
-                      {selectedSignal.verdict}
-                    </span>
-                  )}
+                  <BarChart3 size={15} className="text-apex-cyan" />
+                  <span style={{ fontFamily: 'var(--font-display, sans-serif)', fontSize: '16px', fontWeight: 900, color: '#FFFFFF', letterSpacing: '-0.01em' }}>
+                    {selectedSymbol}
+                  </span>
+                  {selectedSignal && <VerdictBadge verdict={selectedSignal.verdict} size="sm" />}
                 </div>
-                <div className="flex gap-2 text-[10px] font-data text-white/30 uppercase tracking-widest">
-                  <span className="px-2 py-1 bg-apex-cyan/10 border border-apex-cyan/20 text-apex-cyan">Live</span>
-                </div>
+                <span style={{ fontFamily: 'var(--font-data, monospace)', fontSize: '9px', letterSpacing: '0.12em', textTransform: 'uppercase', color: '#00F0FF', background: 'rgba(0,240,255,0.08)', border: '1px solid rgba(0,240,255,0.18)', padding: '2px 8px' }}>
+                  Live
+                </span>
               </div>
-              <div className="h-[420px]">
-                <TradingViewChart symbol={selectedSymbol} height={420} />
+              <div className="h-[400px]">
+                <TradingViewChart symbol={selectedSymbol} height={400} />
               </div>
             </motion.div>
 
+            {/* Signal detail panel */}
             {selectedSignal && (
               <motion.div
                 key={`detail-${selectedSymbol}`}
-                initial={{ opacity: 0, y: 10 }}
+                initial={{ opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.4, delay: 0.1 }}
-                className="cyber-panel border border-white/10 bg-black/60 p-6"
+                transition={{ duration: 0.35, delay: 0.08 }}
+                style={{ border: '1px solid rgba(255,255,255,0.08)', background: 'rgba(0,0,0,0.55)', padding: '24px' }}
               >
-                {/* Detail Header */}
-                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-8">
-                  <div className="flex items-center gap-3">
-                    <div className="p-3 bg-apex-accent/10 border border-apex-accent/20">
-                      <Cpu size={24} className="text-apex-accent" />
-                    </div>
-                    <div>
-                      <div className="flex items-center gap-2 mb-1">
-                        <h3 className="text-sm font-data uppercase tracking-[0.2em] text-white/40">Market Reasoning — {selectedSymbol}</h3>
-                        <span className="text-[8px] text-white/20 uppercase tracking-widest border border-white/5 px-1.5 py-0.5">{selectedSignal.calibrated_label}</span>
-                      </div>
-                      <div className="flex items-center gap-4">
-                        <span className={`text-2xl font-display font-black uppercase ${VERDICT_STYLES[selectedSignal.verdict?.toLowerCase()]?.text || 'text-white'}`}>
-                          {selectedSignal.verdict}
+                {/* Detail header */}
+                <div className="flex flex-col md:flex-row md:items-start justify-between gap-4 mb-8">
+                  <div>
+                    <p style={{ fontFamily: 'var(--font-data, monospace)', fontSize: '9px', letterSpacing: '0.18em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.30)', marginBottom: '8px' }}>
+                      Market Reasoning — {selectedSymbol}
+                    </p>
+                    <div className="flex items-center gap-4 flex-wrap">
+                      <VerdictBadge verdict={selectedSignal.verdict} size="md" />
+                      <div style={{ height: '24px', width: '1px', background: 'rgba(255,255,255,0.10)' }} />
+                      <div>
+                        <span style={{ fontFamily: 'var(--font-data, monospace)', fontSize: '18px', fontWeight: 700, color: selectedColor }}>
+                          {selectedConfidencePct.toFixed(0)}%
                         </span>
-                        <div className="h-6 w-[1px] bg-white/10" />
-                        <div className="flex flex-col">
-                          <span className="text-white font-data text-sm font-bold">
-                            {selectedConfidencePct.toFixed(0)}%
-                          </span>
-                          <span className="text-[9px] text-white/30 uppercase tracking-widest leading-none mt-1">Confidence</span>
-                        </div>
-                        <div className="h-6 w-[1px] bg-white/10" />
-                        <div className="flex flex-col">
-                          <span className="text-white font-data text-xs uppercase">{selectedSignal.timeframe || '1-3 DAYS'}</span>
-                          <span className="text-[9px] text-white/30 uppercase tracking-widest leading-none mt-1">Timeframe</span>
-                        </div>
+                        <span style={{ fontFamily: 'var(--font-data, monospace)', fontSize: '9px', color: 'rgba(255,255,255,0.28)', textTransform: 'uppercase', letterSpacing: '0.12em', display: 'block' }}>
+                          Confidence
+                        </span>
+                      </div>
+                      <div style={{ height: '24px', width: '1px', background: 'rgba(255,255,255,0.10)' }} />
+                      <div>
+                        <span style={{ fontFamily: 'var(--font-data, monospace)', fontSize: '11px', color: 'rgba(255,255,255,0.70)', textTransform: 'uppercase' }}>
+                          {selectedSignal.timeframe || '1-3 DAYS'}
+                        </span>
+                        <span style={{ fontFamily: 'var(--font-data, monospace)', fontSize: '9px', color: 'rgba(255,255,255,0.28)', textTransform: 'uppercase', letterSpacing: '0.12em', display: 'block' }}>
+                          Timeframe
+                        </span>
                       </div>
                     </div>
+                    {selectedSignal.calibrated_label && (
+                      <span style={{ fontFamily: 'var(--font-data, monospace)', fontSize: '9px', color: 'rgba(255,255,255,0.22)', display: 'inline-block', marginTop: '6px', border: '1px solid rgba(255,255,255,0.06)', padding: '2px 7px' }}>
+                        {selectedSignal.calibrated_label}
+                      </span>
+                    )}
                   </div>
-
                   <button
                     onClick={() => handleRefresh(selectedSymbol)}
                     disabled={refreshCooldowns.has(selectedSymbol) || refreshingSymbols.has(selectedSymbol)}
-                    className="px-4 py-2 bg-white/5 hover:bg-apex-accent hover:text-black border border-white/10 hover:border-apex-accent font-data text-[10px] font-bold uppercase tracking-widest transition-all h-fit flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
+                    className="flex items-center gap-2 px-4 py-2 transition-all disabled:opacity-35 shrink-0"
+                    style={{ fontFamily: 'var(--font-data, monospace)', fontSize: '9px', letterSpacing: '0.12em', textTransform: 'uppercase', border: '1px solid rgba(255,255,255,0.10)', color: 'rgba(255,255,255,0.60)', background: 'rgba(255,255,255,0.03)' }}
                   >
-                    <RefreshCw size={14} className={refreshingSymbols.has(selectedSymbol) ? 'animate-spin' : ''} />
-                    {refreshingSymbols.has(selectedSymbol) ? 'Refreshing...' : refreshCooldowns.has(selectedSymbol) ? 'Wait 60s' : 'Refetch Signal'}
+                    <RefreshCw size={12} className={refreshingSymbols.has(selectedSymbol) ? 'animate-spin' : ''} />
+                    {refreshingSymbols.has(selectedSymbol) ? 'Refreshing…' : refreshCooldowns.has(selectedSymbol) ? 'Wait 60s' : 'Refetch Signal'}
                   </button>
                 </div>
 
-                {/* Synthesis */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mb-8 pt-8 border-t border-white/5">
+                {/* Confidence bar */}
+                <ConfidenceBar
+                  value={selectedConfidencePct}
+                  height={3}
+                  showValue={false}
+                  className="mb-8"
+                />
+
+                {/* Synthesis + indicators */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-8 pt-8" style={{ borderTop: '1px solid rgba(255,255,255,0.05)' }}>
                   <div className="space-y-4">
-                    <h4 className="text-[10px] font-data uppercase tracking-[0.3em] text-apex-accent">AI Synthesis</h4>
-                    <p className="text-white/90 font-body text-base leading-relaxed tracking-tight">
+                    <h4 style={{ fontFamily: 'var(--font-data, monospace)', fontSize: '9px', letterSpacing: '0.20em', textTransform: 'uppercase', color: '#CCFF00' }}>AI Synthesis</h4>
+                    <p style={{ fontFamily: 'var(--font-body, Inter, sans-serif)', fontSize: '14px', lineHeight: 1.65, color: 'rgba(255,255,255,0.88)', letterSpacing: '-0.005em' }}>
                       {selectedSignal.reasoning}
                     </p>
-                    <div className="p-4 bg-apex-profit/5 border border-apex-profit/10 border-l-[3px]">
-                      <p className="text-[9px] text-apex-profit uppercase font-data font-bold tracking-widest mb-2">Bullish Driver</p>
-                      <p className="text-white/80 text-sm font-body">{selectedSignal.bull_case}</p>
+                    <div className="p-4" style={{ background: 'rgba(0,255,136,0.04)', border: '1px solid rgba(0,255,136,0.12)', borderLeft: '3px solid rgba(0,255,136,0.40)' }}>
+                      <p style={{ fontFamily: 'var(--font-data, monospace)', fontSize: '8px', color: '#00FF88', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.14em', marginBottom: '6px' }}>Bullish Driver</p>
+                      <p style={{ fontFamily: 'var(--font-body)', fontSize: '12px', color: 'rgba(255,255,255,0.75)', lineHeight: 1.5 }}>{selectedSignal.bull_case}</p>
                     </div>
                   </div>
 
                   <div className="space-y-4">
-                    <h4 className="text-[10px] font-data uppercase tracking-[0.3em] text-white/30">Key Supporting Indicators</h4>
+                    <h4 style={{ fontFamily: 'var(--font-data, monospace)', fontSize: '9px', letterSpacing: '0.20em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.30)' }}>Key Signals</h4>
                     <div className="space-y-2">
-                      {(selectedSignal.key_indicators || []).map((tag, idx) => (
-                        <div key={idx} className="flex items-center gap-3 p-3 bg-white/[0.03] border border-white/5">
-                          <Activity size={14} className="text-apex-cyan/50" />
-                          <span className="text-xs text-white/70 font-data">{tag}</span>
+                      {(selectedSignal.key_indicators || []).map((tag, i) => (
+                        <div key={i} className="flex items-center gap-3 px-3 py-2.5" style={{ background: 'rgba(255,255,255,0.025)', border: '1px solid rgba(255,255,255,0.05)' }}>
+                          <Activity size={12} style={{ color: 'rgba(0,240,255,0.45)', flexShrink: 0 }} />
+                          <span style={{ fontFamily: 'var(--font-data, monospace)', fontSize: '10px', color: 'rgba(255,255,255,0.65)', letterSpacing: '0.02em' }}>{tag}</span>
                         </div>
                       ))}
                     </div>
-                    <div className="p-4 bg-apex-loss/5 border border-apex-loss/10 border-l-[3px]">
-                      <p className="text-[9px] text-apex-loss uppercase font-data font-bold tracking-widest mb-2">Primary Risk</p>
-                      <p className="text-white/80 text-sm font-body">{selectedSignal.bear_case}</p>
+                    <div className="p-4" style={{ background: 'rgba(255,0,85,0.04)', border: '1px solid rgba(255,0,85,0.12)', borderLeft: '3px solid rgba(255,0,85,0.35)' }}>
+                      <p style={{ fontFamily: 'var(--font-data, monospace)', fontSize: '8px', color: '#FF0055', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.14em', marginBottom: '6px' }}>Primary Risk</p>
+                      <p style={{ fontFamily: 'var(--font-body)', fontSize: '12px', color: 'rgba(255,255,255,0.75)', lineHeight: 1.5 }}>{selectedSignal.bear_case}</p>
                     </div>
                   </div>
                 </div>
 
-                {/* Calculator + Contextual Stats */}
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mt-8 pt-8 border-t border-white/5">
+                {/* Calculator + persistence */}
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-5 mt-8 pt-8" style={{ borderTop: '1px solid rgba(255,255,255,0.05)' }}>
                   <div className="lg:col-span-2">
                     <PositionCalculator
                       price={selectedSignal.price}
-                      stopLoss={selectedSignal.stop_loss || `${(selectedSignal.price * 0.95).toFixed(2)} (Managed Risk)`}
+                      stopLoss={selectedSignal.stop_loss || `${(selectedSignal.price * 0.95).toFixed(2)} (Managed)`}
                     />
                   </div>
-                  <div className="cyber-panel p-6 bg-white/[0.02] border border-white/5 flex flex-col justify-between">
+                  <div className="flex flex-col justify-between p-5" style={{ background: 'rgba(255,255,255,0.018)', border: '1px solid rgba(255,255,255,0.06)' }}>
                     <div>
                       <div className="flex items-center gap-2 mb-3">
-                        <History size={14} className="text-white/40" />
-                        <span className="text-[10px] font-data uppercase tracking-widest text-white/40">Signal Persistence</span>
+                        <History size={13} style={{ color: 'rgba(255,255,255,0.35)' }} />
+                        <span style={{ fontFamily: 'var(--font-data, monospace)', fontSize: '9px', letterSpacing: '0.16em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.35)' }}>Signal Metadata</span>
                       </div>
-                      <div className="space-y-3">
-                        <div className="flex justify-between border-b border-white/5 pb-2">
-                          <span className="text-[10px] text-white/30 font-data">Generated</span>
-                          <span className="text-[10px] text-white font-data">
-                            {selectedSignal.generated_at ? new Date(selectedSignal.generated_at).toLocaleTimeString() : '—'}
-                          </span>
-                        </div>
-                        <div className="flex justify-between border-b border-white/5 pb-2">
-                          <span className="text-[10px] text-white/30 font-data">AI Model</span>
-                          <span className="text-[10px] text-white font-data">claude-sonnet-4</span>
-                        </div>
-                        <div className="flex justify-between border-b border-white/5 pb-2">
-                          <span className="text-[10px] text-white/30 font-data">Raw Conf.</span>
-                          <span className="text-[10px] text-white font-data">
-                            {selectedSignal.raw_confidence !== undefined ? `${selectedSignal.raw_confidence}%` : '—'}
-                          </span>
-                        </div>
+                      <div className="space-y-2.5">
+                        {[
+                          { l: 'Generated', v: selectedSignal.generated_at ? new Date(selectedSignal.generated_at).toLocaleTimeString() : '—' },
+                          { l: 'AI Model',  v: 'claude-sonnet-4' },
+                          { l: 'Raw Conf.', v: selectedSignal.raw_confidence != null ? `${selectedSignal.raw_confidence}%` : '—' },
+                        ].map(({ l, v }) => (
+                          <div key={l} className="flex justify-between" style={{ borderBottom: '1px solid rgba(255,255,255,0.04)', paddingBottom: '8px' }}>
+                            <span style={{ fontFamily: 'var(--font-data, monospace)', fontSize: '9px', color: 'rgba(255,255,255,0.28)', textTransform: 'uppercase', letterSpacing: '0.10em' }}>{l}</span>
+                            <span style={{ fontFamily: 'var(--font-data, monospace)', fontSize: '9px', color: 'rgba(255,255,255,0.65)' }}>{v}</span>
+                          </div>
+                        ))}
                       </div>
                     </div>
                     <button
                       onClick={() => navigate('/chat', { state: { symbol: selectedSymbol, signal: selectedSignal } })}
-                      className="mt-6 w-full py-2 bg-indigo-500/10 hover:bg-indigo-500/20 border border-indigo-500/30 text-indigo-400 text-[10px] font-data uppercase tracking-widest transition-all"
+                      className="mt-5 w-full py-2 transition-all"
+                      style={{ fontFamily: 'var(--font-data, monospace)', fontSize: '9px', letterSpacing: '0.14em', textTransform: 'uppercase', background: 'rgba(99,102,241,0.10)', border: '1px solid rgba(99,102,241,0.25)', color: 'rgba(129,140,248,0.80)' }}
                     >
                       Ask Assistant about {selectedSymbol}
                     </button>
                   </div>
                 </div>
 
-                {/* Technical snapshots */}
+                {/* Technical indicator row */}
                 {selectedSignal.indicators_snapshot && (
-                  <div className="mt-8 pt-6 border-t border-white/5 flex flex-wrap gap-4 items-center">
-                    <span className="text-[9px] text-white/20 uppercase tracking-widest mr-2">Core Tech Data:</span>
+                  <div className="mt-8 pt-6 flex flex-wrap gap-2 items-center" style={{ borderTop: '1px solid rgba(255,255,255,0.05)' }}>
+                    <span style={{ fontFamily: 'var(--font-data, monospace)', fontSize: '8px', color: 'rgba(255,255,255,0.20)', textTransform: 'uppercase', letterSpacing: '0.14em', marginRight: '4px' }}>Core Data:</span>
                     {[
-                      { l: 'RSI', v: selectedSignal.indicators_snapshot.rsi?.value?.toFixed(1) },
-                      { l: 'EMA 9/21', v: selectedSignal.indicators_snapshot.ema?.relationship },
-                      { l: '52w High', v: (selectedSignal.indicators_snapshot.range_52w?.dist_from_high_pct)?.toFixed(1) + '%' },
-                      { l: 'BB Pos', v: selectedSignal.indicators_snapshot.bollinger?.position },
-                    ].filter((t) => t.v).map((tag) => (
-                      <span key={tag.l} className="px-2 py-0.5 bg-white/5 border border-white/10 text-white/40 text-[9px] uppercase tracking-tighter">
-                        {tag.l}: <span className="text-white/60 ml-1">{tag.v}</span>
-                      </span>
+                      { l: 'RSI',     v: selectedSignal.indicators_snapshot.rsi?.value?.toFixed(1)                                  },
+                      { l: 'EMA',     v: selectedSignal.indicators_snapshot.ema?.relationship                                       },
+                      { l: '52w Hi',  v: (selectedSignal.indicators_snapshot.range_52w?.dist_from_high_pct)?.toFixed(1) + '%'       },
+                      { l: 'BB Pos',  v: selectedSignal.indicators_snapshot.bollinger?.position?.toFixed(2)                         },
+                    ].filter(t => t.v).map(t => (
+                      <IndicatorPill key={t.l} text={`${t.l}: ${t.v}`} neutral />
                     ))}
                   </div>
                 )}

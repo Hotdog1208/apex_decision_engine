@@ -46,9 +46,9 @@
     --color-info: #00F0FF;
 
     /* Typography */
-    --font-display: 'Space Grotesk', sans-serif;
-    --font-data: 'JetBrains Mono', monospace;
-    --font-body: 'Inter', sans-serif;
+    --font-display: 'Orbitron', 'Space Grotesk', sans-serif;
+    --font-data: 'Share Tech Mono', 'JetBrains Mono', monospace;
+    --font-body: 'Inter', system-ui, sans-serif;
   }
 
   body {
