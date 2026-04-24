@@ -123,11 +123,16 @@ export const api = {
   // Retention tracking
   logEvent: (userId, symbol, action) => postApi('/events', { user_id: userId, symbol, action }),
   getEvents: () => fetchApi('/admin/events'),
-  // New Task 3, 4, 5 endpoints
   getMarketRegime: () => fetchApi('/market-regime'),
   recordSignalOutcome: (signalId, outcome) => postApi('/signals/outcome', { signal_id: signalId, outcome }),
   getSignalPerformance: () => fetchApi('/signals/performance'),
   regenerateSignal: (symbol) => fetchApi('/signals/' + encodeURIComponent(symbol)),
+  // Track Record
+  getAccuracy: () => fetchApi('/admin/accuracy'),
+  // Refresh a single signal bypassing the 15-min cache
+  refreshSignal: (symbol) => fetchApi('/signals/' + encodeURIComponent(symbol) + '?force=true'),
+  // Batch signals for custom watchlist
+  getBatchSignals: (symbols) => fetchApi('/signals/batch?symbols=' + encodeURIComponent(symbols.join(','))),
 }
 
 export function useWebSocket(onMessage) {

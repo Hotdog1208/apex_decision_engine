@@ -25,6 +25,14 @@ class PaperTrader:
         if not LOG_FILE.exists():
             with open(LOG_FILE, "w") as f:
                 json.dump([], f)
+        else:
+            try:
+                with open(LOG_FILE, "r") as f:
+                    json.load(f)
+            except (json.JSONDecodeError, ValueError) as e:
+                logger.warning(f"Malformed paper trade log detected, starting fresh: {e}")
+                with open(LOG_FILE, "w") as f:
+                    json.dump([], f)
 
     def log_signal(self, signal: Dict[str, Any]):
         """
@@ -154,13 +162,19 @@ class PaperTrader:
                     "accuracy": (v_correct / len(v_eval) * 100) if len(v_eval) > 0 else 0.0
                 }
 
+            sorted_logs = sorted(logs, key=lambda x: x.get("timestamp", ""))
+            earliest_timestamp = sorted_logs[0].get("timestamp") if sorted_logs else None
+            recent_entries = sorted(logs, key=lambda x: x.get("timestamp", ""), reverse=True)[:20]
+
             return {
                 "total_signals": len(logs),
                 "evaluated": total_evaluated,
                 "correct": correct_count,
                 "accuracy_pct": round(accuracy_pct, 1),
                 "by_verdict": by_verdict,
-                "avg_confidence": round(sum(l["confidence"] for l in logs) / len(logs), 1) if logs else 0.0
+                "avg_confidence": round(sum(l["confidence"] for l in logs) / len(logs), 1) if logs else 0.0,
+                "earliest_timestamp": earliest_timestamp,
+                "recent_entries": recent_entries,
             }
         except Exception as e:
             logger.error(f"Failed to get stats: {e}")

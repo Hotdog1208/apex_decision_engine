@@ -17,6 +17,7 @@ const FAQ = lazy(() => import('./pages/FAQ'))
 const Disclaimer = lazy(() => import('./pages/Disclaimer'))
 const ComingSoon = lazy(() => import('./pages/ComingSoon'))
 const PerformancePage = lazy(() => import('./pages/PerformancePage'))
+const TrackRecord = lazy(() => import('./pages/TrackRecord'))
 
 // Hidden features — code preserved, routes guarded with ComingSoon
 const LiveTrading = lazy(() => import('./pages/LiveTrading'))
@@ -37,9 +38,10 @@ import CommandPalette from './components/CommandPalette'
 import BackendStatus from './components/BackendStatus'
 import NoiseOverlay from './components/NoiseOverlay'
 import GlitchText from './components/GlitchText'
+import OnboardingModal from './components/OnboardingModal'
 import { AuthProvider, useAuth } from './context/AuthContext'
 import { Toaster, toast } from 'react-hot-toast'
-import { Sun, Moon, Command, LayoutDashboard, BarChart2, Activity, ChevronDown, LogOut, User } from 'lucide-react'
+import { Sun, Moon, Command, LayoutDashboard, BarChart2, Activity, ChevronDown, LogOut, User, HelpCircle, Award } from 'lucide-react'
 
 function ThemeToggle() {
   const { theme, setTheme } = useTheme()
@@ -65,6 +67,7 @@ function AppNav() {
   const [commandOpen, setCommandOpen] = useState(false)
   const [userMenuOpen, setUserMenuOpen] = useState(false)
   const [regime, setRegime] = useState(null)
+  const [onboardingOpen, setOnboardingOpen] = useState(false)
 
   useEffect(() => {
     api.getMarketRegime().then(setRegime).catch(() => {})
@@ -120,6 +123,11 @@ function AppNav() {
               <NavLink to="/charts" className={`px-3 py-2 border rounded transition-all flex items-center gap-2 text-xs uppercase tracking-widest font-bold ${location.pathname === '/charts' ? 'text-black bg-apex-cyan border-apex-cyan shadow-[0_0_15px_var(--accent-cyan-muted)]' : 'text-white/60 border-white/5 hover:border-apex-cyan/50 hover:text-apex-cyan'}`}>
                 <BarChart2 size={14} className={location.pathname === '/charts' ? 'animate-pulse' : ''} />
                 Charts
+              </NavLink>
+
+              <NavLink to="/track-record" className={`px-3 py-2 border rounded transition-all flex items-center gap-2 text-xs uppercase tracking-widest font-bold ${location.pathname === '/track-record' ? 'text-black bg-apex-profit border-apex-profit' : 'text-white/60 border-white/5 hover:border-apex-profit/50 hover:text-apex-profit'}`}>
+                <Award size={14} />
+                Track Record
               </NavLink>
 
               <div className="w-[1px] h-8 bg-white/10 mx-2" />
@@ -201,11 +209,20 @@ function AppNav() {
 
               <div className="w-[1px] h-8 bg-white/10 mx-1" />
               <ThemeToggle />
+              <button
+                onClick={() => setOnboardingOpen(true)}
+                className="p-2 rounded text-white/30 hover:text-apex-accent transition-colors"
+                title="What is ADE?"
+                aria-label="Open help"
+              >
+                <HelpCircle size={16} />
+              </button>
             </div>
           </div>
         </div>
       </nav>
       <CommandPalette open={commandOpen} onClose={() => setCommandOpen(false)} />
+      <OnboardingModal forceOpen={onboardingOpen} onClose={() => setOnboardingOpen(false)} />
     </>
   )
 }
@@ -235,6 +252,7 @@ function App() {
                   <Route path="/signup" element={<Signup />} />
                   <Route path="/dashboard" element={<Dashboard />} />
                   <Route path="/charts" element={<Charts />} />
+                  <Route path="/track-record" element={<TrackRecord />} />
                   <Route path="/admin/performance" element={<PerformancePage />} />
 
                   {/* Hidden features — show ComingSoon placeholder */}

@@ -84,7 +84,7 @@ def check_rate_limit(request: Request):
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     logger.error(f"Unhandled exception: {exc}", exc_info=True)
-    return JSONResponse(status_code=500, content={"error": str(exc)})
+    return JSONResponse(status_code=500, content={"error": "internal_error", "message": str(exc)})
 
 # Engine state
 engine: DecisionEngine | None = None
@@ -142,23 +142,53 @@ async def startup():
     """Initialize on startup."""
     global engine
     engine = DecisionEngine(portfolio_value=portfolio_value, data_dir=project_root / "data")
-    logger.info("Apex Decision Engine API started (DATA_SOURCE=%s)", _data_source)
-    if _data_source == "yahoo":
-        logger.info("Live market data: Yahoo Finance (charts, screener, heatmap, quotes)")
-    if (os.environ.get("FINNHUB_API_KEY") or "").strip():
-        logger.info("News & calendar: Finnhub enabled")
-    if (os.environ.get("ANTHROPIC_API_KEY") or "").strip():
-        logger.info("Chat: Claude enabled")
-    
-    # Start paper trader evaluation background job
+
+    # Task 2: Structured startup logging — never log key values
+    logger.info("=== ADE Backend Starting ===")
+    logger.info(f"DATA_SOURCE: {_data_source}")
+    logger.info(f"ANTHROPIC_API_KEY present: {bool((os.environ.get('ANTHROPIC_API_KEY') or '').strip())}")
+    logger.info(f"FINNHUB_API_KEY present: {bool((os.environ.get('FINNHUB_API_KEY') or '').strip())}")
+    try:
+        log_path = project_root / "data" / "paper_trade_log.json"
+        if log_path.exists():
+            with open(log_path, "r") as _f:
+                _log_data = json.load(_f)
+            logger.info(f"Paper log entry count: {len(_log_data)}")
+        else:
+            logger.info("Paper log entry count: 0 (file will be created)")
+    except Exception:
+        logger.info("Paper log entry count: unknown (read error)")
+
     import asyncio
+
+    # Task 2: Self-ping every 14 minutes to prevent Render free tier spin-down
+    async def self_ping_loop():
+        import urllib.request
+        port = os.environ.get("PORT", "8000")
+        await asyncio.sleep(60)  # Let app fully start before first ping
+        while True:
+            try:
+                loop = asyncio.get_event_loop()
+                await loop.run_in_executor(
+                    None,
+                    lambda: urllib.request.urlopen(f"http://localhost:{port}/health", timeout=10)
+                )
+                logger.info("Self-ping: /health OK")
+            except Exception as ping_err:
+                logger.warning(f"Self-ping failed: {ping_err}")
+            await asyncio.sleep(840)  # 14 minutes
+
+    asyncio.create_task(self_ping_loop())
+
+    # Paper trader evaluation background job (every 24 hours)
     async def run_evaluation_loop():
         while True:
             paper_trader.evaluate_signals()
-            await asyncio.sleep(86400) # Every 24 hours
-    
+            await asyncio.sleep(86400)
+
     asyncio.create_task(run_evaluation_loop())
     logger.info("Paper trade evaluation job scheduled.")
+    logger.info("ADE backend ready")
 
 
 # --- Auth components needed by endpoints ---
@@ -374,9 +404,13 @@ async def get_signal_performance() -> Dict[str, Any]:
 
 
 @app.get("/admin/accuracy")
-async def get_accuracy_dashboard(user: str = Depends(get_current_user)) -> Dict[str, Any]:
-    """Return administrative accuracy stats from paper trading log."""
-    return paper_trader.get_stats()
+async def get_accuracy_dashboard() -> Dict[str, Any]:
+    """Return accuracy stats from paper trading log. Public — powers the track record page."""
+    try:
+        return paper_trader.get_stats()
+    except Exception as e:
+        logger.error(f"Accuracy stats failed: {e}")
+        return {"error": "stats_unavailable", "message": str(e), "evaluated": 0, "correct": 0, "accuracy_pct": 0, "by_verdict": {}, "recent_entries": []}
 
 
 @app.get("/chart/{symbol}")
@@ -621,24 +655,54 @@ def _generate_signal_for_symbol(sym: str, snapshot: Dict[str, Any]) -> Dict[str,
     }
 
 
-@app.get("/signals/{symbol}")
-async def get_signal_for_symbol(symbol: str) -> Dict[str, Any]:
-    """AI signal card for a single symbol. Uses Claude-powered engine."""
-    try:
-        sym = validate_symbol(symbol)
-        return await _generate_claude_signal(sym, connector)
-    except Exception as e:
-        logger.exception("Signal generation failed for %s: %s", symbol, e)
-        return _generate_signal_for_symbol(validate_symbol(symbol), {})
-
-
 @app.get("/signals/batch/mvp")
 async def get_mvp_signals() -> Dict[str, Any]:
     """Batch signal cards for all 10 MVP watchlist symbols."""
     import asyncio
     tasks = [_generate_claude_signal(sym, connector) for sym in _MVP_SYMBOLS]
     signals = await asyncio.gather(*tasks)
-    return {"signals": signals, "symbols": _MVP_SYMBOLS}
+    return {"signals": list(signals), "symbols": _MVP_SYMBOLS}
+
+
+@app.get("/signals/batch")
+async def get_batch_signals(symbols: str = "") -> Dict[str, Any]:
+    """Batch signal cards for custom symbol list (comma-separated, max 20)."""
+    try:
+        import asyncio
+        sym_list = [s.strip().upper() for s in symbols.split(",") if s.strip()]
+        validated = []
+        for s in sym_list[:20]:
+            try:
+                validated.append(validate_symbol(s))
+            except Exception:
+                pass
+        if not validated:
+            return {"signals": [], "symbols": []}
+        tasks = [_generate_claude_signal(sym, connector) for sym in validated]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        signals = []
+        for sym, res in zip(validated, results):
+            if isinstance(res, Exception):
+                signals.append(_generate_signal_for_symbol(sym, {}))
+            else:
+                signals.append(res)
+        return {"signals": signals, "symbols": validated}
+    except Exception as e:
+        logger.error(f"Batch signals failed: {e}")
+        return {"error": str(e), "signals": [], "symbols": []}
+
+
+@app.get("/signals/{symbol}")
+async def get_signal_for_symbol(symbol: str, force: bool = False) -> Dict[str, Any]:
+    """AI signal card for a single symbol. Uses Claude-powered engine. Set force=true to bypass cache."""
+    try:
+        sym = validate_symbol(symbol)
+        if force and sym in signal_cache:
+            del signal_cache[sym]
+        return await _generate_claude_signal(sym, connector)
+    except Exception as e:
+        logger.exception("Signal generation failed for %s: %s", symbol, e)
+        return _generate_signal_for_symbol(validate_symbol(symbol), {})
 
 
 @app.get("/config")
