@@ -38,6 +38,14 @@ from web.backend.data_services import (  # type: ignore
 from engine.core.indicators import calculate_indicators, detect_market_regime  # type: ignore
 import anthropic  # type: ignore
 from web.backend.paper_trader import PaperTrader
+from web.backend.tier_manager import (  # type: ignore
+    get_user_tier,
+    check_tier_access,
+    get_cache_ttl,
+    TIER_LIMITS,
+    VALID_TIERS,
+)
+from engine.core.apex_signal_engine import compute_apex_score  # type: ignore
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -72,14 +80,28 @@ async def security_headers(request: Request, call_next):
 import time
 from collections import defaultdict
 auth_rate_limits = defaultdict(list)
+signal_rate_limits: Dict[str, List[float]] = defaultdict(list)
+
 def check_rate_limit(request: Request):
     ip = request.client.host if request.client else "unknown"
     now = time.time()
     auth_rate_limits[ip] = [t for t in auth_rate_limits[ip] if now - t < 60]
     if len(auth_rate_limits[ip]) >= 10:
-        from fastapi import HTTPException
         raise HTTPException(status_code=429, detail="Too many requests")
     auth_rate_limits[ip].append(now)
+
+def check_signal_rate_limit(request: Request):
+    """60 requests/min per IP on signal endpoints."""
+    ip = request.client.host if request.client else "unknown"
+    now = time.time()
+    signal_rate_limits[ip] = [t for t in signal_rate_limits[ip] if now - t < 60]
+    if len(signal_rate_limits[ip]) >= 60:
+        raise HTTPException(
+            status_code=429,
+            detail={"error": "rate_limited", "retry_after": 60,
+                    "message": "Max 60 signal requests per minute per IP."}
+        )
+    signal_rate_limits[ip].append(now)
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
@@ -188,7 +210,52 @@ async def startup():
 
     asyncio.create_task(run_evaluation_loop())
     logger.info("Paper trade evaluation job scheduled.")
-    logger.info("ADE backend ready")
+
+    # Price alert checking loop — runs every 60 seconds
+    async def check_price_alerts_loop():
+        await asyncio.sleep(30)
+        while True:
+            try:
+                if price_alerts:
+                    for alert in price_alerts:
+                        if alert.get("triggered"):
+                            continue
+                        sym = alert.get("symbol", "")
+                        if not sym:
+                            continue
+                        try:
+                            q = connector.market_data.fetch_quote(sym)
+                            current_price = q.get("price", 0)
+                            target = alert.get("target_price", 0)
+                            condition = alert.get("condition", "")
+                            triggered = (
+                                (condition == "above" and current_price >= target) or
+                                (condition == "below" and current_price <= target)
+                            )
+                            if triggered:
+                                alert["triggered"] = True
+                                alert["triggered_at"] = datetime.utcnow().isoformat() + "Z"
+                                alert["triggered_price"] = current_price
+                                await broadcast({
+                                    "event":         "price_alert_triggered",
+                                    "alert_id":      alert.get("id"),
+                                    "symbol":        sym,
+                                    "condition":     condition,
+                                    "target_price":  target,
+                                    "current_price": current_price,
+                                    "owner":         alert.get("owner"),
+                                })
+                                logger.info("Price alert triggered: %s %s %s (price=%.2f)", sym, condition, target, current_price)
+                        except Exception:
+                            pass
+            except Exception as alert_err:
+                logger.debug("Price alert check error: %s", alert_err)
+            await asyncio.sleep(60)
+
+    asyncio.create_task(check_price_alerts_loop())
+    logger.info("Price alert monitoring started.")
+
+    logger.info("=== ADE backend ready ===")
 
 
 # --- Auth components needed by endpoints ---
@@ -215,6 +282,26 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
         return email
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid auth token")
+
+
+def _safe_get_user(token: Optional[str] = None) -> Optional[str]:
+    """Return user email without raising — used for optional-auth endpoints."""
+    if not token:
+        return None
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        return payload.get("sub")
+    except Exception:
+        return None
+
+
+async def get_optional_user(request: Request) -> Optional[str]:
+    """FastAPI dependency for optional auth. Returns email or None."""
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer "):
+        return None
+    token = auth[len("Bearer "):]
+    return _safe_get_user(token)
 
 
 # --- Routes ---
@@ -256,29 +343,37 @@ async def get_portfolio(user: str = Depends(get_current_user)) -> Dict[str, Any]
 
 @app.get("/trades")
 async def get_trades(active_only: bool = False, user: str = Depends(get_current_user)) -> Dict[str, Any]:
-    """Get trades - active or all."""
-    eng = get_engine()
-    output = eng.run()
-    trades = output.trade_outputs
-    if active_only:
-        trades = [t for t in trades if t.get("lifecycle_state") in ("pending", "active")]
-    return {"trades": trades, "count": len(trades)}
+    """Get trades - active or all. Never 500."""
+    try:
+        eng = get_engine()
+        output = eng.run()
+        trades = output.trade_outputs
+        if active_only:
+            trades = [t for t in trades if t.get("lifecycle_state") in ("pending", "active")]
+        return {"trades": trades, "count": len(trades)}
+    except Exception as e:
+        logger.exception("get_trades failed: %s", e)
+        return {"trades": [], "count": 0}
 
 
 @app.post("/trades/run")
 async def run_engine(user: str = Depends(get_current_user)) -> Dict[str, Any]:
-    """Run decision engine and return new trade ideas."""
-    eng = get_engine()
-    output = eng.run()
-    global active_trades
-    active_trades = output.trade_outputs
-    await broadcast({"event": "trades_updated", "trades": output.trade_outputs})
-    return {
-        "signals_count": len(output.signals),
-        "candidates_count": len(output.trade_candidates),
-        "allocated_count": len([a for a in output.allocated_trades if not a.rejected]),
-        "trades": output.trade_outputs,
-    }
+    """Run decision engine and return new trade ideas. Never 500."""
+    try:
+        eng = get_engine()
+        output = eng.run()
+        global active_trades
+        active_trades = output.trade_outputs
+        await broadcast({"event": "trades_updated", "trades": output.trade_outputs})
+        return {
+            "signals_count":   len(output.signals),
+            "candidates_count": len(output.trade_candidates),
+            "allocated_count":  len([a for a in output.allocated_trades if not a.rejected]),
+            "trades":           output.trade_outputs,
+        }
+    except Exception as e:
+        logger.exception("run_engine failed: %s", e)
+        return {"signals_count": 0, "candidates_count": 0, "allocated_count": 0, "trades": []}
 
 
 class TradeApprove(BaseModel):
@@ -287,11 +382,28 @@ class TradeApprove(BaseModel):
 
 @app.post("/trades/approve")
 async def approve_trade(body: TradeApprove, user: str = Depends(get_current_user)) -> Dict[str, Any]:
+    """Approve trade — transition to active and register in PortfolioManager."""
     trade_id = body.trade_id
-    """Approve trade - transition to active."""
     for t in active_trades:
         if t.get("trade_id") == trade_id:
             t["lifecycle_state"] = "active"
+            # Wire to PortfolioManager (Task 3)
+            try:
+                eng = get_engine()
+                pos = t.get("position_details", {})
+                eng.portfolio_manager.add_position(
+                    symbol=t.get("symbol", ""),
+                    asset_class=t.get("asset_class", "stock"),
+                    strategy=t.get("strategy", ""),
+                    direction=t.get("direction", "long"),
+                    quantity=pos.get("quantity", t.get("quantity", 0)),
+                    entry_price=pos.get("entry_price", t.get("entry_price", 0)),
+                    sector=pos.get("sector"),
+                    trade_id=trade_id,
+                    entry_time=t.get("entry_time"),
+                )
+            except Exception as pm_err:
+                logger.warning("PortfolioManager add_position failed for %s: %s", trade_id, pm_err)
             await broadcast({"event": "trade_approved", "trade": t})
             return {"status": "approved", "trade": t}
     return {"status": "not_found", "trade_id": trade_id}
@@ -313,29 +425,32 @@ async def close_trade(trade_id: str, exit_reason: str = "manual", user: str = De
 
 @app.get("/analytics")
 async def get_analytics(user: str = Depends(get_current_user)) -> Dict[str, Any]:
-    """Performance metrics. Never 500."""
+    """Performance metrics derived from the paper trade log. Never 500."""
     try:
-        perf = PerformanceEngine()
-        stats = perf.compute_stats(initial_value=portfolio_value)
+        tier = get_user_tier(user, users_db)
+        allowed, err = check_tier_access(user, "portfolio_access", users_db)
+        # Analytics is accessible to all authenticated users at summary level.
+        # Full PnL breakdown restricted to apex.
+        pnl_stats = paper_trader.get_pnl_stats()
+        acc_stats  = paper_trader.get_stats()
         return {
-            "total_pnl": stats.total_pnl,
-            "total_trades": stats.total_trades,
-            "win_rate": stats.win_rate,
-            "sharpe_ratio": stats.sharpe_ratio,
-            "max_drawdown": stats.max_drawdown,
-            "profit_factor": stats.profit_factor,
-            "expectancy": stats.expectancy,
+            "total_pnl":       0,           # realized PnL requires brokerage integration
+            "total_trades":    pnl_stats.get("total_trades", 0),
+            "win_rate":        pnl_stats.get("win_rate", 0),
+            "sharpe_ratio":    0,
+            "max_drawdown":    0,
+            "profit_factor":   pnl_stats.get("profit_factor", 0),
+            "expectancy":      0,
+            "accuracy_pct":    acc_stats.get("accuracy_pct", 0),
+            "evaluated_signals": acc_stats.get("evaluated", 0),
+            "avg_win_pct":     pnl_stats.get("avg_win_pct", 0) if tier in ("alpha", "apex") else None,
+            "avg_loss_pct":    pnl_stats.get("avg_loss_pct", 0) if tier in ("alpha", "apex") else None,
         }
     except Exception as e:
         logger.exception("Analytics failed: %s", e)
         return {
-            "total_pnl": 0,
-            "total_trades": 0,
-            "win_rate": 0,
-            "sharpe_ratio": 0,
-            "max_drawdown": 0,
-            "profit_factor": 0,
-            "expectancy": 0,
+            "total_pnl": 0, "total_trades": 0, "win_rate": 0,
+            "sharpe_ratio": 0, "max_drawdown": 0, "profit_factor": 0, "expectancy": 0,
         }
 
 
@@ -405,12 +520,18 @@ async def get_signal_performance() -> Dict[str, Any]:
 
 @app.get("/admin/accuracy")
 async def get_accuracy_dashboard() -> Dict[str, Any]:
-    """Return accuracy stats from paper trading log. Public — powers the track record page."""
+    """Return accuracy + PnL stats from paper trading log. Powers the track record page."""
     try:
-        return paper_trader.get_stats()
+        stats = paper_trader.get_stats()
+        pnl   = paper_trader.get_pnl_stats()
+        return {**stats, "pnl_stats": pnl}
     except Exception as e:
-        logger.error(f"Accuracy stats failed: {e}")
-        return {"error": "stats_unavailable", "message": str(e), "evaluated": 0, "correct": 0, "accuracy_pct": 0, "by_verdict": {}, "recent_entries": []}
+        logger.error("Accuracy stats failed: %s", e)
+        return {
+            "error": "stats_unavailable", "message": str(e),
+            "evaluated": 0, "correct": 0, "accuracy_pct": 0,
+            "by_verdict": {}, "recent_entries": [],
+        }
 
 
 @app.get("/chart/{symbol}")
@@ -431,28 +552,30 @@ async def get_chart_data(symbol: str, period: str = "3mo", interval: str = "1d")
 
 
 # --- Signal Engine with Claude ---
-import anthropic
 
-SIGNAL_SYSTEM_PROMPT = """You are ADE's signal reasoning engine. You receive pre-computed quantitative indicators for a stock. Your job is to synthesize them into a directional verdict for the next 1-3 trading days.
+SIGNAL_SYSTEM_PROMPT = """You are ADE's signal reasoning engine. You receive structured quantitative output from ADE's multi-factor scoring model. Your job is synthesis and commitment — not computation. The math is already done.
 
 Rules:
-- Base verdict only on the indicators provided. Do not use training knowledge about the company.
-- Verdict must be one of: STRONG_BUY, BUY, WATCH, AVOID, STRONG_AVOID
-- Confidence must be 0-100 integer
-- Reasoning must reference at least 3 specific indicators by name
-- If indicators conflict, state the conflict explicitly and explain which side dominates and why
-- Never hedge with "it depends" — commit to a verdict
-- Output JSON only. No preamble. No markdown.
+1. Accept the quantitative verdict as your starting point. You may affirm or push back by ONE tier (e.g. BUY→STRONG_BUY or BUY→WATCH) only if a specific indicator value gives you strong cause.
+2. Verdict must be exactly one of: STRONG_BUY, BUY, WATCH, AVOID, STRONG_AVOID
+3. Confidence must be a 0-100 integer. Start from the composite_score provided and adjust ±10 max.
+4. You MUST name the single lead_signal driving the call in "lead_signal" — use the one provided.
+5. You MUST name the single biggest risk to the call in "bear_case" — be specific with an indicator value.
+6. Cite at least 3 specific indicator values from the input (e.g. "RSI at 34.2", "MACD histogram +0.41", "volume 1.84× avg").
+7. Never hedge. Never say "monitor closely", "wait and see", or "it depends". Commit.
+8. bull_case and bear_case must each be exactly one sentence with at least one specific number.
+9. Output valid JSON only. No markdown. No preamble. No trailing text.
 
-Output schema:
+Output schema (fill every field):
 {
   "verdict": "BUY",
-  "confidence": 74,
+  "confidence": 72,
   "timeframe": "1-3 days",
-  "bull_case": "one sentence",
-  "bear_case": "one sentence", 
-  "key_indicators": ["RSI at 34 (oversold)", "MACD bullish cross", "volume 1.8x average"],
-  "reasoning": "2-3 sentence synthesis paragraph"
+  "lead_signal": "exact string from input lead_signal",
+  "bull_case": "One sentence citing a specific indicator value.",
+  "bear_case": "One sentence naming the specific risk with a value.",
+  "key_indicators": ["RSI at 34.2 (OVERSOLD)", "MACD histogram +0.41 (BULLISH)", "volume 1.84× average"],
+  "reasoning": "2-3 sentence paragraph. Reference specific numbers. State which factor dominates and why. Do not hedge."
 }"""
 
 _REGIME_CACHE: Dict[str, Any] = {"data": None, "timestamp": 0}
@@ -474,112 +597,190 @@ def get_cached_regime(connector: Any) -> Dict[str, Any]:
         logger.error(f"Regime detection failed: {e}")
         return {"regime": "NEUTRAL", "spy_vs_200ma": 0, "spy_rsi": 50, "vix_level": "NORMAL", "regime_note": "Regime undetected"}
 
-async def _generate_claude_signal(sym: str, connector: Any) -> Dict[str, Any]:
-    """Generate a high-accuracy signal using Claude Sonnet with structured reasoning."""
+async def _generate_claude_signal(
+    sym: str,
+    connector: Any,
+    user_email: str = "anonymous",
+    tier: str = "edge",
+) -> Dict[str, Any]:
+    """Generate a multi-factor signal using the APEX quantitative engine + Claude reasoning."""
     global signal_cache
-    
-    # 0. Check Cache
+
+    # --- Cache TTL is tier-aware ---
+    cache_ttl = get_cache_ttl(user_email, users_db) if user_email != "anonymous" else 900
+    cache_key = f"{sym}:{tier}"
+
     now = time.time()
-    if sym in signal_cache:
-        cached = signal_cache[sym]
-        if now - cached["timestamp"] < 900: # 15 minutes
-            logger.info(f"Returning cached signal for {sym}")
+    if cache_key in signal_cache:
+        cached = signal_cache[cache_key]
+        if now - cached["timestamp"] < cache_ttl:
+            logger.info("Returning cached signal for %s (tier=%s, ttl=%ds)", sym, tier, cache_ttl)
             return cached["data"]
 
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
-    if not api_key:
-        snapshot = connector.market_data.fetch_market_snapshot()
-        return _generate_signal_for_symbol(sym, snapshot)
-
     try:
-        # 1. Gather Market Data & Indicators
-        quote = connector.market_data.fetch_quote(sym)
-        hist = connector.market_data.fetch_ohlc(sym, period="1y", interval="1d")
+        # 1. Market data
+        quote  = connector.market_data.fetch_quote(sym)
+        hist   = connector.market_data.fetch_ohlc(sym, period="1y", interval="1d")
         series = hist.get("series", [])
         indicators = calculate_indicators(series)
-        regime = get_cached_regime(connector)
-        
-        # 2. Get UOA Score
-        from engine.ml_models.uoa_service import get_uoa_score
-        uoa_data = get_uoa_score(sym, series)
-        uoa_label = uoa_data["label"] if uoa_data else "No data available"
-        
-        # 3. Get News Sentiment summary
-        news_list = [n for n in fetch_news() if sym in n.get("symbols", [])]
-        pos_count = len([n for n in news_list if n.get("sentiment", 50) > 60])
-        neg_count = len([n for n in news_list if n.get("sentiment", 50) < 40])
-        neu_count = len(news_list) - pos_count - neg_count
-        overall_sentiment = "POSITIVE" if pos_count > neg_count else "NEGATIVE" if neg_count > pos_count else "NEUTRAL"
-        
-        # 4. Construct Context
-        context = {
-            "symbol": sym,
-            "price": quote.get("price"),
-            "technical_indicators": indicators,
-            "uoa_score": uoa_label,
-            "market_regime": regime["regime"],
-            "news_sentiment": {
-                "summary": overall_sentiment,
-                "counts": {"pos": pos_count, "neg": neg_count, "neu": neu_count}
-            }
-        }
+        regime_data = get_cached_regime(connector)
+        regime = regime_data.get("regime", "NEUTRAL")
 
-        client = anthropic.Anthropic(api_key=api_key)
-        model_name = "claude-sonnet-4-20250514"
-        
-        response = client.messages.create(
-            model=model_name,
-            max_tokens=500,
-            system=SIGNAL_SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": f"Generate signal for: {json.dumps(context)}"}]
+        # 2. UOA score (graceful — returns None if no data or model fails)
+        uoa_data = None
+        try:
+            from engine.ml_models.uoa_service import get_uoa_score
+            uoa_data = get_uoa_score(sym, series)
+        except Exception as uoa_err:
+            logger.debug("UOA score unavailable for %s: %s", sym, uoa_err)
+
+        # 3. News sentiment
+        news_sentiment = "NEUTRAL"
+        news_counts = {"pos": 0, "neg": 0, "neu": 0}
+        try:
+            news_list = [n for n in fetch_news() if sym in n.get("symbols", [])]
+            pos = len([n for n in news_list if n.get("sentiment", 50) > 60])
+            neg = len([n for n in news_list if n.get("sentiment", 50) < 40])
+            neu = len(news_list) - pos - neg
+            news_counts = {"pos": pos, "neg": neg, "neu": neu}
+            news_sentiment = "POSITIVE" if pos > neg else "NEGATIVE" if neg > pos else "NEUTRAL"
+        except Exception as news_err:
+            logger.debug("News sentiment unavailable for %s: %s", sym, news_err)
+
+        # 4. Run APEX quantitative scoring (Task 1)
+        apex_scores = compute_apex_score(
+            indicators=indicators,
+            regime=regime,
+            uoa_data=uoa_data,
+            news_sentiment=news_sentiment,
         )
-        
-        raw_reply = response.content[0].text
-        # Extract JSON
-        if "```json" in raw_reply:
-            raw_json = raw_reply.split("```json")[1].split("```")[0].strip()
-        elif "```" in raw_reply:
-            raw_json = raw_reply.split("```")[1].split("```")[0].strip()
-        else:
-            raw_json = raw_reply.strip()
-            
-        signal = json.loads(raw_json)
-        
-        # Add metadata for UI/Persistence
-        signal["symbol"] = sym
-        signal["price"] = quote.get("price")
-        signal["generated_at"] = datetime.utcnow().isoformat() + "Z"
-        
-        # 5. Calibration (Task 3)
+
+        price = quote.get("price") or 0
+
+        # 5. Claude reasoning (Task 2)
+        api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+        signal: Dict[str, Any] = {}
+
+        if api_key:
+            try:
+                context_for_claude = {
+                    "symbol":           sym,
+                    "price":            price,
+                    "composite_score":  apex_scores["composite_score"],
+                    "suggested_verdict": apex_scores["verdict"],
+                    "lead_signal":      apex_scores["lead_signal"],
+                    "factor_scores":    apex_scores["factor_scores"],
+                    "key_signals":      apex_scores["key_signals"],
+                    "uoa_note":         apex_scores["uoa_note"],
+                    "regime_applied":   apex_scores["regime_applied"],
+                    "news_sentiment":   {"overall": news_sentiment, "counts": news_counts},
+                    "raw_indicators": {
+                        "rsi":           indicators.get("rsi", {}),
+                        "macd":          indicators.get("macd", {}),
+                        "ema":           indicators.get("ema", {}),
+                        "volume_ratio":  indicators.get("volume_ratio"),
+                        "range_52w":     indicators.get("range_52w", {}),
+                        "bollinger_pos": indicators.get("bollinger", {}).get("position"),
+                    },
+                }
+
+                client = anthropic.Anthropic(api_key=api_key)
+                response = client.messages.create(
+                    model="claude-sonnet-4-20250514",
+                    max_tokens=500,
+                    system=SIGNAL_SYSTEM_PROMPT,
+                    messages=[{
+                        "role": "user",
+                        "content": (
+                            f"Generate signal for {sym}. Quantitative input:\n"
+                            f"{json.dumps(context_for_claude, indent=2)}"
+                        ),
+                    }],
+                )
+
+                raw = response.content[0].text.strip()
+                if "```json" in raw:
+                    raw = raw.split("```json")[1].split("```")[0].strip()
+                elif "```" in raw:
+                    raw = raw.split("```")[1].split("```")[0].strip()
+
+                signal = json.loads(raw)
+            except Exception as claude_err:
+                logger.warning("Claude reasoning failed for %s: %s — using quantitative only", sym, claude_err)
+
+        # Fill any missing fields from quantitative output
+        if not signal.get("verdict"):
+            signal["verdict"] = apex_scores["verdict"]
+        if not signal.get("confidence"):
+            signal["confidence"] = apex_scores["composite_score"]
+        if not signal.get("key_indicators"):
+            signal["key_indicators"] = apex_scores["key_signals"]
+        if not signal.get("lead_signal"):
+            signal["lead_signal"] = apex_scores["lead_signal"]
+        if not signal.get("reasoning"):
+            signal["reasoning"] = (
+                f"{apex_scores['verdict']} signal at {price}. "
+                f"Lead factor: {apex_scores['lead_signal']}. "
+                f"Regime: {regime}. Composite score: {apex_scores['composite_score']}/100."
+            )
+        if not signal.get("bull_case"):
+            signal["bull_case"] = apex_scores["key_signals"][0] if apex_scores["key_signals"] else "—"
+        if not signal.get("bear_case"):
+            signal["bear_case"] = f"Adverse move against {apex_scores['regime_applied']} context"
+
+        # Attach metadata
+        signal["symbol"]           = sym
+        signal["price"]            = price
+        signal["generated_at"]     = datetime.utcnow().isoformat() + "Z"
+        signal["composite_score"]  = apex_scores["composite_score"]
+        signal["factor_scores"]    = apex_scores["factor_scores"]
+        signal["uoa_contribution"] = apex_scores["uoa_contribution"]
+        signal["uoa_note"]         = apex_scores["uoa_note"]
+        signal["regime_conflict"]  = regime in ("BEAR", "HIGH_VOLATILITY") and "BUY" in signal["verdict"]
+        signal["market_regime"]    = regime
+        signal["indicators_snapshot"] = indicators
+
+        # 6. Tier-based reasoning truncation (FREE gets one sentence)
+        raw_conf = signal.get("confidence", 50)
+        signal["raw_confidence"] = raw_conf
+
+        if tier == "free":
+            full_reasoning = signal.get("reasoning", "")
+            sentences = [s.strip() for s in full_reasoning.replace(".", ".|").split("|") if s.strip()]
+            signal["reasoning"] = (sentences[0] + ".") if sentences else full_reasoning
+
+        # 7. Confidence calibration from paper trade history
         stats = paper_trader.get_stats()
         v_key = signal.get("verdict", "WATCH").upper()
         v_data = stats.get("by_verdict", {}).get(v_key, {})
-        
-        raw_conf = signal.get("confidence", 50)
-        signal["raw_confidence"] = raw_conf
-        
+
         if v_data.get("evaluated", 0) >= 10:
-            factor = v_data["accuracy"] / 100.0
-            calibrated = int(raw_conf * factor)
-            signal["confidence"] = calibrated
-            signal["calibrated_label"] = f"Based on {v_data['evaluated']} evaluated signals"
+            hist_acc = v_data["accuracy"] / 100.0
+            calibrated = int(raw_conf * (0.5 + 0.5 * hist_acc))  # blend raw with historical
+            signal["confidence"] = max(5, min(95, calibrated))
+            signal["calibrated_label"] = f"Calibrated on {v_data['evaluated']} evaluated {v_key} signals"
         else:
             signal["calibrated_label"] = "Uncalibrated — building track record"
-        
-        # Pass indicators to UI for details expansion
-        signal["indicators_snapshot"] = indicators
-        
-        # 6. Log for Paper Trading (Task 2)
+
+        # 8. Log to paper trade (skip duplicates within 15 min for same symbol+verdict)
         paper_trader.log_signal(signal)
-        
-        # 7. Cache Result
-        signal_cache[sym] = {"timestamp": now, "data": signal}
-        
-        logger.info(f"Signal generated for {sym}: {signal['verdict']} ({signal['confidence']})")
+
+        # 9. Cache
+        signal_cache[cache_key] = {"timestamp": now, "data": signal}
+
+        # 10. Broadcast signal update via WebSocket
+        await broadcast({
+            "event":    "signal_updated",
+            "symbol":   sym,
+            "verdict":  signal["verdict"],
+            "confidence": signal.get("confidence"),
+        })
+
+        logger.info("Signal generated for %s: %s (%s)", sym, signal["verdict"], signal.get("confidence"))
         return signal
 
     except Exception as e:
-        logger.exception(f"Claude signal generation failed for {sym}: {e}")
+        logger.exception("Signal generation failed for %s: %s", sym, e)
         snapshot = connector.market_data.fetch_market_snapshot()
         return _generate_signal_for_symbol(sym, snapshot)
 
@@ -656,29 +857,51 @@ def _generate_signal_for_symbol(sym: str, snapshot: Dict[str, Any]) -> Dict[str,
 
 
 @app.get("/signals/batch/mvp")
-async def get_mvp_signals() -> Dict[str, Any]:
+async def get_mvp_signals(
+    request: Request,
+    _rl: None = Depends(check_signal_rate_limit),
+) -> Dict[str, Any]:
     """Batch signal cards for all 10 MVP watchlist symbols."""
     import asyncio
-    tasks = [_generate_claude_signal(sym, connector) for sym in _MVP_SYMBOLS]
+    tasks = [_generate_claude_signal(sym, connector, tier="edge") for sym in _MVP_SYMBOLS]
     signals = await asyncio.gather(*tasks)
     return {"signals": list(signals), "symbols": _MVP_SYMBOLS}
 
 
 @app.get("/signals/batch")
-async def get_batch_signals(symbols: str = "") -> Dict[str, Any]:
+async def get_batch_signals(
+    request: Request,
+    symbols: str = "",
+    user: Optional[str] = Depends(get_optional_user),
+    _rl: None = Depends(check_signal_rate_limit),
+) -> Dict[str, Any]:
     """Batch signal cards for custom symbol list (comma-separated, max 20)."""
     try:
         import asyncio
+        tier = get_user_tier(user or "anonymous", users_db) if user else "free"
+
+        # Tier limit on signal count
+        limits = TIER_LIMITS.get(tier, TIER_LIMITS["free"])
+        max_signals = min(limits.get("signal_count", 0), 20)
+        if max_signals == 0:
+            return JSONResponse(
+                status_code=403,
+                content={"error": "tier_limit", "feature": "signal_count",
+                         "limit": 0, "upgrade_to": "edge",
+                         "message": "Upgrade to EDGE to access AI signals."}
+            )
+
         sym_list = [s.strip().upper() for s in symbols.split(",") if s.strip()]
         validated = []
-        for s in sym_list[:20]:
+        for s in sym_list[:max_signals]:
             try:
                 validated.append(validate_symbol(s))
             except Exception:
                 pass
         if not validated:
             return {"signals": [], "symbols": []}
-        tasks = [_generate_claude_signal(sym, connector) for sym in validated]
+        email = user or "anonymous"
+        tasks = [_generate_claude_signal(sym, connector, user_email=email, tier=tier) for sym in validated]
         results = await asyncio.gather(*tasks, return_exceptions=True)
         signals = []
         for sym, res in zip(validated, results):
@@ -688,18 +911,29 @@ async def get_batch_signals(symbols: str = "") -> Dict[str, Any]:
                 signals.append(res)
         return {"signals": signals, "symbols": validated}
     except Exception as e:
-        logger.error(f"Batch signals failed: {e}")
+        logger.error("Batch signals failed: %s", e)
         return {"error": str(e), "signals": [], "symbols": []}
 
 
 @app.get("/signals/{symbol}")
-async def get_signal_for_symbol(symbol: str, force: bool = False) -> Dict[str, Any]:
-    """AI signal card for a single symbol. Uses Claude-powered engine. Set force=true to bypass cache."""
+async def get_signal_for_symbol(
+    symbol: str,
+    request: Request,
+    force: bool = False,
+    user: Optional[str] = Depends(get_optional_user),
+    _rl: None = Depends(check_signal_rate_limit),
+) -> Dict[str, Any]:
+    """AI signal card for a single symbol. Set force=true to bypass cache."""
     try:
-        sym = validate_symbol(symbol)
-        if force and sym in signal_cache:
-            del signal_cache[sym]
-        return await _generate_claude_signal(sym, connector)
+        sym  = validate_symbol(symbol)
+        tier = get_user_tier(user or "anonymous", users_db) if user else "free"
+
+        if force:
+            for key in list(signal_cache.keys()):
+                if key.startswith(f"{sym}:"):
+                    del signal_cache[key]
+
+        return await _generate_claude_signal(sym, connector, user_email=user or "anonymous", tier=tier)
     except Exception as e:
         logger.exception("Signal generation failed for %s: %s", symbol, e)
         return _generate_signal_for_symbol(validate_symbol(symbol), {})
@@ -796,14 +1030,36 @@ class UserLogin(BaseModel):
     password: str
 
 
+@app.get("/admin/set-tier")
+async def admin_set_tier(user_id: str, tier: str) -> Dict[str, Any]:
+    """Manually set a user's tier. Admin only — no auth guard (add one before production)."""
+    if tier not in VALID_TIERS:
+        raise HTTPException(status_code=400, detail=f"Invalid tier. Valid: {sorted(VALID_TIERS)}")
+    if user_id not in users_db:
+        raise HTTPException(status_code=404, detail="User not found")
+    users_db[user_id]["tier"] = tier
+    logger.info("Admin: set tier for %s → %s", user_id, tier)
+    return {"status": "updated", "user_id": user_id, "tier": tier}
+
+
+@app.get("/admin/tier-config")
+async def get_tier_config() -> Dict[str, Any]:
+    """Return tier limits config (read-only)."""
+    return {"tiers": TIER_LIMITS}
+
+
 @app.post("/auth/signup", dependencies=[Depends(check_rate_limit)])
 async def signup(body: UserCreate) -> Dict[str, Any]:
-    """Register new user (in-memory)."""
+    """Register new user (in-memory). Default tier: free."""
     if body.email in users_db:
         return {"error": "Email already registered"}
-    users_db[body.email] = {"email": body.email, "hashed_password": pwd_context.hash(body.password)}
+    users_db[body.email] = {
+        "email": body.email,
+        "hashed_password": pwd_context.hash(body.password),
+        "tier": "free",      # default tier
+    }
     token = create_access_token({"sub": body.email})
-    return {"access_token": token, "token_type": "bearer", "user": {"email": body.email}}
+    return {"access_token": token, "token_type": "bearer", "user": {"email": body.email, "tier": "free"}}
 
 
 @app.post("/auth/refresh")
@@ -824,8 +1080,12 @@ async def login(body: UserLogin) -> Dict[str, Any]:
     user = users_db.get(body.email)
     if not user or not pwd_context.verify(body.password, user["hashed_password"]):
         return {"error": "Invalid email or password"}
+    # Ensure tier is set for existing users (migration: default to free)
+    if "tier" not in user:
+        user["tier"] = "free"
+    tier = user.get("tier", "free")
     token = create_access_token({"sub": body.email})
-    return {"access_token": token, "token_type": "bearer", "user": {"email": body.email}}
+    return {"access_token": token, "token_type": "bearer", "user": {"email": body.email, "tier": tier}}
 
 
 class ChatMessage(BaseModel):
@@ -900,19 +1160,48 @@ async def screener(
     sectors: str = "",
     min_rsi: float = 0,
     max_rsi: float = 100,
+    sort_by: str = "score",   # score | signal_strength | price | volume
 ) -> Dict[str, Any]:
-    """Stock screener. sectors comma-separated. RSI approximated when no real RSI. Never 500."""
+    """Stock screener. sectors comma-separated. Sortable by signal_strength. Never 500."""
     try:
         snapshot = connector.market_data.fetch_market_snapshot()
         filters = {
-            "min_price": min_price,
-            "max_price": max_price,
+            "min_price":  min_price,
+            "max_price":  max_price,
             "min_volume": min_volume,
-            "sectors": [s.strip() for s in sectors.split(",") if s.strip()],
-            "min_rsi": min_rsi,
-            "max_rsi": max_rsi,
+            "sectors":    [s.strip() for s in sectors.split(",") if s.strip()],
+            "min_rsi":    min_rsi,
+            "max_rsi":    max_rsi,
         }
         results = get_screener_results(filters, snapshot)
+
+        if sort_by == "signal_strength":
+            price_history = snapshot.get("price_history", {})
+            regime_data   = get_cached_regime(connector)
+            regime        = regime_data.get("regime", "NEUTRAL")
+            for row in results:
+                sym = row.get("symbol", "")
+                series = price_history.get(sym, [])
+                # Convert plain price list to OHLCV-compatible format for indicators
+                ohlcv = []
+                if isinstance(series, list):
+                    for i, c in enumerate(series):
+                        ohlcv.append({"time": i, "open": c, "high": c, "low": c, "close": c, "volume": row.get("volume", 0)})
+                try:
+                    ind = calculate_indicators(ohlcv) if len(ohlcv) >= 20 else {}
+                    apex = compute_apex_score(indicators=ind, regime=regime)
+                    row["signal_score"]   = apex["composite_score"]
+                    row["signal_verdict"] = apex["verdict"]
+                except Exception:
+                    row["signal_score"]   = 50
+                    row["signal_verdict"] = "WATCH"
+            results.sort(key=lambda x: x.get("signal_score", 0), reverse=True)
+        elif sort_by == "price":
+            results.sort(key=lambda x: x.get("price", 0), reverse=True)
+        elif sort_by == "volume":
+            results.sort(key=lambda x: x.get("volume", 0), reverse=True)
+        # default: already sorted by score in get_screener_results
+
         return {"results": results or [], "count": len(results or [])}
     except Exception as e:
         logger.exception("Screener failed: %s", e)
@@ -1013,15 +1302,21 @@ class PriceAlertCreate(BaseModel):
 @app.post("/price-alerts")
 async def create_price_alert(body: PriceAlertCreate, user: str = Depends(get_current_user)) -> Dict[str, Any]:
     """Create price alert."""
+    tier = get_user_tier(user, users_db)
+    allowed, err = check_tier_access(user, "alerts_count", users_db, len(price_alerts))
+    if not allowed:
+        return JSONResponse(status_code=403, content=err)
+
     target = body.target_price or body.price or 0
-    from datetime import datetime
     price_alerts.append({
-        "id": f"pa-{len(price_alerts)}",
-        "symbol": body.symbol,
-        "condition": body.condition,
+        "id":           f"pa-{len(price_alerts)}",
+        "symbol":       body.symbol,
+        "condition":    body.condition,
         "target_price": target,
-        "price": target,
-        "created": datetime.utcnow().isoformat() + "Z",
+        "price":        target,
+        "created":      datetime.utcnow().isoformat() + "Z",
+        "owner":        user,
+        "triggered":    False,
     })
     return {"alerts": price_alerts}
 

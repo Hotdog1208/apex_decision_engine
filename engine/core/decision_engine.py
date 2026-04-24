@@ -66,20 +66,47 @@ class DecisionEngine:
     def load_market_snapshot(self) -> Dict[str, Any]:
         """Load market snapshot from data dir."""
         path = self.data_dir / "market_snapshot.json"
-        with open(path, "r") as f:
-            return json.load(f)
+        try:
+            with open(path, "r") as f:
+                return json.load(f)
+        except FileNotFoundError:
+            import logging
+            logging.getLogger(__name__).warning("market_snapshot.json not found at %s", path)
+            return {"stocks": [], "price_history": {}, "timestamp": ""}
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error("Failed to load market snapshot: %s", e)
+            return {"stocks": [], "price_history": {}, "timestamp": ""}
 
     def load_option_chain(self) -> Dict[str, Any]:
         """Load option chain from data dir."""
         path = self.data_dir / "option_chain.json"
-        with open(path, "r") as f:
-            return json.load(f)
+        try:
+            with open(path, "r") as f:
+                return json.load(f)
+        except FileNotFoundError:
+            import logging
+            logging.getLogger(__name__).warning("option_chain.json not found at %s", path)
+            return {"underlying": "", "underlying_price": 0, "calls": [], "puts": [], "expirations": []}
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error("Failed to load option chain: %s", e)
+            return {"underlying": "", "underlying_price": 0, "calls": [], "puts": [], "expirations": []}
 
     def load_futures_chain(self) -> Dict[str, Any]:
         """Load futures chain from data dir."""
         path = self.data_dir / "futures_chain.json"
-        with open(path, "r") as f:
-            return json.load(f)
+        try:
+            with open(path, "r") as f:
+                return json.load(f)
+        except FileNotFoundError:
+            import logging
+            logging.getLogger(__name__).warning("futures_chain.json not found at %s", path)
+            return {"contracts": [], "price_history": {}}
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error("Failed to load futures chain: %s", e)
+            return {"contracts": [], "price_history": {}}
 
     def run(self) -> EngineOutput:
         """
