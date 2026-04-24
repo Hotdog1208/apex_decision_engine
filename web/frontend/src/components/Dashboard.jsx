@@ -264,55 +264,53 @@ export default function Dashboard() {
 
   return (
     <PageWrapper className="relative min-h-screen">
-      <div className="space-y-10 relative z-10 mt-4 mb-24">
+      <div className="space-y-6 relative z-10 mt-5 mb-24">
 
-        {/* ── Hero header ── */}
+        {/* ── Command bar header ── */}
         <motion.div
-          initial={{ opacity: 0, y: 16 }}
+          initial={{ opacity: 0, y: 12 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.55, ease: easing }}
-          className="relative overflow-hidden p-7 md:p-10"
+          transition={{ duration: 0.45, ease: easing }}
+          className="relative overflow-hidden"
           style={{
-            background: 'rgba(255,255,255,0.015)',
+            background: 'rgba(7,9,15,0.85)',
             border: '1px solid rgba(255,255,255,0.07)',
-            borderLeft: '4px solid #CCFF00',
+            borderLeft: '3px solid var(--accent-primary)',
+            padding: '20px 24px',
           }}
         >
-          <div className="absolute inset-0 bg-gradient-to-br from-apex-accent/4 via-transparent to-transparent pointer-events-none" />
-          <div className="absolute -right-10 -top-10 text-[14rem] font-black text-apex-accent/[0.04] pointer-events-none select-none" style={{ fontFamily: 'var(--font-display, sans-serif)' }}>
-            AI
-          </div>
+          <div className="absolute inset-0 bg-gradient-to-r from-apex-accent/[0.03] to-transparent pointer-events-none" />
 
-          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-6 relative z-10">
+          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-5 relative z-10">
             <div>
-              <div className="flex items-center gap-2 mb-3">
-                <Cpu size={16} className="text-apex-accent animate-pulse" />
-                <span style={{ fontFamily: 'var(--font-data, monospace)', fontSize: '10px', letterSpacing: '0.22em', textTransform: 'uppercase', color: '#00F0FF', fontWeight: 700 }}>
+              <div className="flex items-center gap-2 mb-2.5">
+                <Cpu size={12} className="text-apex-accent animate-pulse" />
+                <span style={{ fontFamily: 'var(--font-data, monospace)', fontSize: '9px', letterSpacing: '0.22em', textTransform: 'uppercase', color: 'var(--accent-cyan)', fontWeight: 700 }}>
                   Signal Hub
                 </span>
+                <span style={{ fontFamily: 'var(--font-data, monospace)', fontSize: '9px', color: 'rgba(255,255,255,0.20)', letterSpacing: '0.06em' }}>
+                  · AI-scored · 1-3 day directional window
+                </span>
               </div>
-              <GlitchText as="h1" text="AI Signal Hub" className="text-4xl md:text-5xl font-display font-black tracking-tighter leading-none text-white" />
-              <p style={{ fontFamily: 'var(--font-data, monospace)', fontSize: '10px', letterSpacing: '0.14em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.35)', marginTop: '14px', borderLeft: '2px solid rgba(255,255,255,0.15)', paddingLeft: '10px' }}>
-                AI-scored signals · daily cadence · 1-3 day directional window
-              </p>
+              <GlitchText as="h1" text="AI Signal Hub" className="text-3xl md:text-4xl font-display font-black tracking-tighter leading-none text-white" />
               <Link
                 to="/track-record"
                 className="inline-flex items-center gap-1.5 mt-3 transition-colors"
-                style={{ fontFamily: 'var(--font-data, monospace)', fontSize: '10px', letterSpacing: '0.08em', color: 'rgba(0,255,136,0.60)' }}
+                style={{ fontFamily: 'var(--font-data, monospace)', fontSize: '9px', letterSpacing: '0.08em', color: 'rgba(0,232,121,0.55)' }}
               >
-                <ExternalLink size={10} />
-                See ADE's track record →
+                <ExternalLink size={9} />
+                ADE track record →
               </Link>
             </div>
 
-            {/* Verdict count chips */}
-            <div className="flex gap-3 flex-wrap">
+            {/* Verdict count chips — compact */}
+            <div className="flex gap-2 flex-wrap">
               {Object.entries(verdictCounts).map(([verdict, count]) => {
                 const c = VERDICT_COLOR[verdict] || '#CCFF00'
                 return (
-                  <div key={verdict} className="text-center px-4 py-2.5 min-w-[64px]" style={{ border: `1px solid ${c}28`, background: `${c}0A` }}>
-                    <p style={{ fontFamily: 'var(--font-display, sans-serif)', fontSize: '22px', fontWeight: 900, color: c, lineHeight: 1 }}>{count}</p>
-                    <p style={{ fontFamily: 'var(--font-data, monospace)', fontSize: '8px', color: 'rgba(255,255,255,0.35)', textTransform: 'uppercase', letterSpacing: '0.12em', marginTop: '3px' }}>{verdict}</p>
+                  <div key={verdict} className="text-center px-3 py-2 min-w-[52px]" style={{ border: `1px solid ${c}22`, background: `${c}08` }}>
+                    <p style={{ fontFamily: 'var(--font-display, sans-serif)', fontSize: '18px', fontWeight: 900, color: c, lineHeight: 1 }}>{count}</p>
+                    <p style={{ fontFamily: 'var(--font-data, monospace)', fontSize: '7px', color: 'rgba(255,255,255,0.30)', textTransform: 'uppercase', letterSpacing: '0.10em', marginTop: '2px' }}>{verdict.replace('_', ' ')}</p>
                   </div>
                 )
               })}
@@ -342,15 +340,15 @@ export default function Dashboard() {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
 
           {/* Signal cards column */}
-          <div className="lg:col-span-1 space-y-4">
-            {/* Column header + watchlist count */}
-            <div className="flex items-center gap-2 mb-1">
-              <Zap size={13} className="text-apex-accent" />
-              <h2 style={{ fontFamily: 'var(--font-data, monospace)', fontSize: '10px', letterSpacing: '0.18em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.40)' }}>
+          <div className="lg:col-span-1 space-y-3">
+            {/* Column header */}
+            <div className="flex items-center gap-2 px-1">
+              <Zap size={11} style={{ color: 'var(--accent-primary)' }} />
+              <h2 style={{ fontFamily: 'var(--font-data, monospace)', fontSize: '9px', letterSpacing: '0.18em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.38)' }}>
                 Watchlist Signals
               </h2>
               {user && watchlist.length > 0 && (
-                <span className="ml-auto" style={{ fontFamily: 'var(--font-data, monospace)', fontSize: '9px', color: 'rgba(255,255,255,0.22)' }}>
+                <span className="ml-auto" style={{ fontFamily: 'var(--font-data, monospace)', fontSize: '8px', color: 'rgba(255,255,255,0.20)' }}>
                   {watchlist.length}/{MAX_WATCHLIST}
                 </span>
               )}
@@ -420,27 +418,35 @@ export default function Dashboard() {
           </div>
 
           {/* Chart + detail column */}
-          <div className="lg:col-span-2 space-y-6">
+          <div className="lg:col-span-2 space-y-5">
 
             {/* Chart */}
             <motion.div
               key={selectedSymbol}
               initial={{ opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.35 }}
-              style={{ border: '1px solid rgba(255,255,255,0.08)', background: 'rgba(0,0,0,0.55)' }}
+              transition={{ duration: 0.30 }}
+              style={{ border: '1px solid rgba(255,255,255,0.08)', background: 'rgba(7,9,15,0.90)' }}
             >
-              <div className="flex items-center justify-between px-5 py-3" style={{ borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
+              <div className="flex items-center justify-between px-5 py-3" style={{ borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
                 <div className="flex items-center gap-3">
-                  <BarChart3 size={15} className="text-apex-cyan" />
+                  <BarChart3 size={13} style={{ color: 'var(--accent-cyan)' }} />
                   <span style={{ fontFamily: 'var(--font-display, sans-serif)', fontSize: '16px', fontWeight: 900, color: '#FFFFFF', letterSpacing: '-0.01em' }}>
                     {selectedSymbol}
                   </span>
                   {selectedSignal && <VerdictBadge verdict={selectedSignal.verdict} size="sm" />}
                 </div>
-                <span style={{ fontFamily: 'var(--font-data, monospace)', fontSize: '9px', letterSpacing: '0.12em', textTransform: 'uppercase', color: '#00F0FF', background: 'rgba(0,240,255,0.08)', border: '1px solid rgba(0,240,255,0.18)', padding: '2px 8px' }}>
-                  Live
-                </span>
+                <div className="flex items-center gap-2">
+                  <span style={{
+                    fontFamily: 'var(--font-data, monospace)', fontSize: '8px', letterSpacing: '0.14em', textTransform: 'uppercase',
+                    color: 'var(--accent-cyan)', background: 'rgba(0,212,255,0.08)',
+                    border: '1px solid rgba(0,212,255,0.18)', padding: '2px 8px',
+                    display: 'flex', alignItems: 'center', gap: '4px',
+                  }}>
+                    <span className="w-1.5 h-1.5 rounded-full bg-apex-cyan animate-pulse inline-block" />
+                    Live
+                  </span>
+                </div>
               </div>
               <div className="h-[400px]">
                 <TradingViewChart symbol={selectedSymbol} height={400} />
@@ -453,8 +459,8 @@ export default function Dashboard() {
                 key={`detail-${selectedSymbol}`}
                 initial={{ opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.35, delay: 0.08 }}
-                style={{ border: '1px solid rgba(255,255,255,0.08)', background: 'rgba(0,0,0,0.55)', padding: '24px' }}
+                transition={{ duration: 0.30, delay: 0.07 }}
+                style={{ border: '1px solid rgba(255,255,255,0.08)', background: 'rgba(7,9,15,0.90)', padding: '24px' }}
               >
                 {/* Detail header */}
                 <div className="flex flex-col md:flex-row md:items-start justify-between gap-4 mb-8">
@@ -511,7 +517,7 @@ export default function Dashboard() {
                 {/* Synthesis + indicators */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-8 pt-8" style={{ borderTop: '1px solid rgba(255,255,255,0.05)' }}>
                   <div className="space-y-4">
-                    <h4 style={{ fontFamily: 'var(--font-data, monospace)', fontSize: '9px', letterSpacing: '0.20em', textTransform: 'uppercase', color: '#CCFF00' }}>AI Synthesis</h4>
+                    <h4 style={{ fontFamily: 'var(--font-data, monospace)', fontSize: '9px', letterSpacing: '0.20em', textTransform: 'uppercase', color: 'var(--accent-violet)' }}>AI Synthesis</h4>
                     <p style={{ fontFamily: 'var(--font-body, Inter, sans-serif)', fontSize: '14px', lineHeight: 1.65, color: 'rgba(255,255,255,0.88)', letterSpacing: '-0.005em' }}>
                       {selectedSignal.reasoning}
                     </p>
