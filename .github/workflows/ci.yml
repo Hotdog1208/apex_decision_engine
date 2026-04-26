@@ -27,8 +27,9 @@ jobs:
 
     - name: Run Backend Tests
       run: |
-        # Provide dummy secrete key for startup checks
+        # Dummy keys for CI — never real secrets
         export ADE_SECRET_KEY="test_secret_key_needs_to_be_32_characters_long_minimum!"
+        export SUPABASE_JWT_SECRET="test_supabase_jwt_secret_for_ci_use_only_32chars!!"
         python -m pytest tests/ -v
 
     - name: Setup Node.js
