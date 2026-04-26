@@ -674,6 +674,140 @@ async def trigger_accuracy_sweep(admin_key: str = "") -> Dict[str, Any]:
         return {"error": str(e), "evaluated": 0}
 
 
+# ── Admin Panel Endpoints (ADMIN_SECRET_KEY gated, no JWT required) ─────────
+
+def _require_admin(admin_key: str) -> None:
+    """Raise 403 if admin_key doesn't match ADMIN_SECRET_KEY env var."""
+    _key = os.environ.get("ADMIN_SECRET_KEY", "")
+    if not _key:
+        raise HTTPException(status_code=503, detail="ADMIN_SECRET_KEY not configured on server")
+    if admin_key != _key:
+        raise HTTPException(status_code=403, detail="Invalid admin key")
+
+
+@app.get("/admin/panel/status")
+async def admin_panel_status(admin_key: str = "") -> Dict[str, Any]:
+    """System health snapshot for admin panel."""
+    _require_admin(admin_key)
+    has_anthropic = bool((os.environ.get("ANTHROPIC_API_KEY") or "").strip())
+    has_finnhub   = bool((os.environ.get("FINNHUB_API_KEY") or "").strip())
+    has_supabase  = bool(SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY)
+    has_stripe    = bool(STRIPE_SECRET_KEY)
+
+    acc_stats: Dict[str, Any] = {}
+    try:
+        from web.backend import signal_logger  # type: ignore
+        if signal_logger._ok():
+            acc_stats = await signal_logger.get_accuracy_stats()
+        else:
+            acc_stats = paper_trader.get_stats()
+    except Exception:
+        acc_stats = {}
+
+    total_chats = sum(len(v) for v in chat_rate_limits.values())
+
+    return {
+        "backend": "ok",
+        "data_source": _data_source,
+        "model": os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-20250514"),
+        "services": {
+            "anthropic_api": has_anthropic,
+            "finnhub":       has_finnhub,
+            "supabase":      has_supabase,
+            "stripe":        has_stripe,
+            "sentry":        bool(_SENTRY_DSN),
+        },
+        "cached_signals":           len(signal_cache),
+        "active_users":             len(users_db),
+        "total_chat_messages_today": total_chats,
+        "accuracy":                  acc_stats,
+        "recent_events":             event_log[-20:],
+        "regime":                    get_cached_regime(connector),
+    }
+
+
+class AdminSignalRequest(BaseModel):
+    symbol: str
+    admin_key: str = ""
+
+
+@app.post("/admin/panel/signal")
+async def admin_panel_signal(body: AdminSignalRequest) -> Dict[str, Any]:
+    """Test PRISM signal for any symbol — bypasses tier/auth checks."""
+    _require_admin(body.admin_key)
+    sym = validate_symbol(body.symbol)
+    # Force-clear cache so we always get a fresh Claude response
+    for key in list(signal_cache.keys()):
+        if key.startswith(f"{sym}:"):
+            del signal_cache[key]
+    return await _generate_claude_signal(sym, connector, user_email="admin", tier="apex")
+
+
+class AdminBriefRequest(BaseModel):
+    watchlist: List[str] = ["SPY", "QQQ", "NVDA", "AAPL", "TSLA"]
+    admin_key: str = ""
+
+
+@app.post("/admin/panel/brief")
+async def admin_panel_brief(body: AdminBriefRequest) -> Dict[str, Any]:
+    """Test CIPHER brief generation — bypasses tier/auth checks."""
+    _require_admin(body.admin_key)
+    watchlist = [s.strip().upper() for s in body.watchlist[:8] if s.strip()]
+    if not watchlist:
+        watchlist = ["SPY", "QQQ", "NVDA", "AAPL", "TSLA"]
+    tasks = [_generate_claude_signal(sym, connector, user_email="admin", tier="apex") for sym in watchlist]
+    sig_results = await asyncio.gather(*tasks, return_exceptions=True)
+    signals = [r for r in sig_results if not isinstance(r, Exception)]
+    regime = get_cached_regime(connector)
+    from web.backend import agent_engine  # type: ignore
+    brief_text = await agent_engine.generate_brief(
+        user_email="admin",
+        user_id="admin",
+        preferences={"watchlist": watchlist},
+        signals=signals,
+        regime=regime,
+    )
+    return {
+        "brief": brief_text,
+        "generated_at": datetime.utcnow().isoformat() + "Z",
+        "symbols": watchlist,
+        "signal_count": len(signals),
+    }
+
+
+class AdminAskRequest(BaseModel):
+    question: str
+    watchlist: List[str] = ["SPY", "QQQ", "NVDA"]
+    session_id: str = "admin-session"
+    admin_key: str = ""
+
+
+@app.post("/admin/panel/ask")
+async def admin_panel_ask(body: AdminAskRequest) -> Dict[str, Any]:
+    """Ask CIPHER a follow-up question — bypasses tier/auth checks."""
+    _require_admin(body.admin_key)
+    question = sanitize_message(body.question)
+    if not question:
+        raise HTTPException(status_code=400, detail="Question cannot be empty")
+    watchlist = [s.strip().upper() for s in body.watchlist[:5] if s.strip()] or ["SPY", "QQQ"]
+    tasks = [_generate_claude_signal(sym, connector, user_email="admin", tier="apex") for sym in watchlist]
+    sig_results = await asyncio.gather(*tasks, return_exceptions=True)
+    signals = [r for r in sig_results if not isinstance(r, Exception)]
+    regime = get_cached_regime(connector)
+    from web.backend import chat_engine, agent_engine  # type: ignore
+    history = chat_engine.get_history(body.session_id)
+    reply = await agent_engine.answer_question(
+        question=question,
+        preferences={"watchlist": watchlist},
+        signals=signals,
+        regime=regime,
+        history=history,
+    )
+    chat_engine._add_to_history(body.session_id, "user", question)
+    chat_engine._add_to_history(body.session_id, "assistant", reply)
+    return {"reply": reply, "session_id": body.session_id}
+
+
 @app.get("/chart/{symbol}")
 async def get_chart_data(symbol: str, period: str = "3mo", interval: str = "1d") -> Dict[str, Any]:
     """Compatibility endpoint for chart data."""

@@ -40,6 +40,7 @@ const Account         = lazy(() => import('./pages/Account'))
 const Pricing         = lazy(() => import('./pages/Pricing'))
 const Agent           = lazy(() => import('./pages/Agent'))
 const NotFound        = lazy(() => import('./pages/NotFound'))
+const AdminDashboard  = lazy(() => import('./pages/AdminDashboard'))
 
 import CommandPalette  from './components/CommandPalette'
 import BackendStatus   from './components/BackendStatus'
@@ -494,6 +495,7 @@ const PAGE_TITLES = {
   '/faq':            'FAQ | ADE',
   '/disclaimer':     'Disclaimer | ADE',
   '/admin/performance': 'Performance | ADE',
+  '/admin':             'Admin Console | ADE',
 }
 
 function TitleUpdater() {
@@ -536,6 +538,7 @@ function AnimatedRoutes() {
         <Route path="/agent"        element={<PrivateRoute><Agent /></PrivateRoute>} />
         <Route path="/account"      element={<PrivateRoute><Account /></PrivateRoute>} />
         <Route path="/admin/performance" element={<PrivateRoute><PerformancePage /></PrivateRoute>} />
+        <Route path="/admin"            element={<AdminDashboard />} />
 
         <Route path="/trading"      element={<PrivateRoute><ComingSoon /></PrivateRoute>} />
         <Route path="/alerts"       element={<PrivateRoute><ComingSoon /></PrivateRoute>} />
