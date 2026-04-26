@@ -108,27 +108,40 @@ function FinancialMatrix() {
 function PostProcessing({ strength = 1, threshold = 1 }) {
   const { gl, scene, camera } = useThree()
   const progressRef = useRef({ value: 0 })
+  const deadRef = useRef(false)
 
   const render = useMemo(() => {
-    const pp = new THREE.PostProcessing(gl)
-    const scenePass = pass(scene, camera)
-    const color = scenePass.getTextureNode('output')
-    const bloomPass = bloom(color, strength, 0.5, threshold)
+    try {
+      const pp = new THREE.PostProcessing(gl)
+      const scenePass = pass(scene, camera)
+      const color = scenePass.getTextureNode('output')
+      const bloomPass = bloom(color, strength, 0.5, threshold)
 
-    const uScan = uniform(0)
-    progressRef.current = uScan
+      const uScan = uniform(0)
+      progressRef.current = uScan
 
-    const scanLine   = smoothstep(0, float(0.05), abs(uv().y.sub(float(uScan.value))))
-    const redOverlay = vec3(1, 0, 0).mul(oneMinus(scanLine)).mul(0.4)
-    const withScan   = mix(color, add(color, redOverlay), smoothstep(0.9, 1.0, oneMinus(scanLine)))
+      const scanLine   = smoothstep(0, float(0.05), abs(uv().y.sub(float(uScan.value))))
+      const redOverlay = vec3(1, 0, 0).mul(oneMinus(scanLine)).mul(0.4)
+      const withScan   = mix(color, add(color, redOverlay), smoothstep(0.9, 1.0, oneMinus(scanLine)))
 
-    pp.outputNode = withScan.add(bloomPass)
-    return pp
+      pp.outputNode = withScan.add(bloomPass)
+      return pp
+    } catch (e) {
+      console.warn('HeroFuturistic: PostProcessing setup failed —', e.message)
+      deadRef.current = true
+      return null
+    }
   }, [camera, gl, scene, strength, threshold])
 
   useFrame(({ clock }) => {
-    progressRef.current.value = Math.sin(clock.getElapsedTime() * 0.5) * 0.5 + 0.5
-    render.renderAsync()
+    if (deadRef.current || !render) return
+    try {
+      progressRef.current.value = Math.sin(clock.getElapsedTime() * 0.5) * 0.5 + 0.5
+      render.renderAsync()
+    } catch (e) {
+      console.warn('HeroFuturistic: renderAsync failed —', e.message)
+      deadRef.current = true
+    }
   }, 1)
 
   return null
@@ -187,13 +200,26 @@ function Scene() {
 }
 
 function HeroCanvas() {
+  const [adapterReady, setAdapterReady] = useState(false)
+
+  useEffect(() => {
+    // requestAdapter() returns null when WebGPU exists in the browser but is
+    // actually unavailable (GPU blocklist, driver failure, etc.). Only mount
+    // the Canvas when we have a confirmed usable adapter.
+    navigator.gpu?.requestAdapter()
+      .then(a => { if (a) setAdapterReady(true) })
+      .catch(() => {})
+  }, [])
+
+  if (!adapterReady) return null
+
   return (
     <Canvas
       flat
       style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', zIndex: 1 }}
       gl={async (props) => {
         const r = new THREE.WebGPURenderer(props)
-        await r.init()
+        if (typeof r.init === 'function') await r.init()
         return r
       }}
     >
