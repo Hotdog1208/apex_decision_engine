@@ -210,8 +210,7 @@ export default function SignalCard({
         onClick={handleExpand}
         style={{
           display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-          width: '100%', marginTop: '8px', paddingTop: '8px',
-          borderTop: '1px solid rgba(255,255,255,0.04)',
+          width: '100%', marginTop: '8px',
           fontFamily: 'var(--font-data, monospace)', fontSize: '8px',
           letterSpacing: '0.10em', textTransform: 'uppercase',
           color: expanded ? stripeColor : 'rgba(255,255,255,0.22)',
