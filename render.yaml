@@ -1,11 +1,72 @@
+# =============================================================================
+# Render deployment configuration for Apex Decision Engine backend
+#
+# This file is used by Render's infrastructure-as-code feature.
+# It does NOT store secret values — those are set in the Render Dashboard
+# under Environment → Secret Files or individual env vars.
+#
+# To deploy: connect this repo to Render, it will detect this file automatically.
+# =============================================================================
+
 services:
   - type: web
     name: apex-engine-api
     env: python
+    region: oregon                          # us-west-2 — change if needed
+    plan: starter                           # upgrade to 'standard' to eliminate cold starts
     buildCommand: "pip install -r web/requirements.txt"
     startCommand: "uvicorn web.backend.app:app --host 0.0.0.0 --port $PORT"
+    healthCheckPath: /health                # Render pings this to detect restarts
+
     envVars:
+      # ── Runtime ──────────────────────────────────────────────────────────
       - key: PYTHON_VERSION
-        value: 3.11.0
+        value: "3.11.0"
+      - key: PORT
+        value: "8000"
+
+      # ── Supabase (set values in Render Dashboard) ─────────────────────────
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_JWT_SECRET
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+
+      # ── Anthropic ─────────────────────────────────────────────────────────
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: ANTHROPIC_MODEL
+        value: "claude-sonnet-4-20250514"
+
+      # ── Stripe ────────────────────────────────────────────────────────────
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
+      - key: STRIPE_PRICE_EDGE
+        sync: false
+      - key: STRIPE_PRICE_ALPHA
+        sync: false
+      - key: STRIPE_PRICE_APEX
+        sync: false
+
+      # ── App ───────────────────────────────────────────────────────────────
+      - key: APP_URL
+        value: "https://apex-decision-engine.vercel.app"
+      - key: CORS_ORIGINS
+        value: "http://localhost:5173,https://apex-decision-engine.vercel.app"
+
+      # ── Market Data ───────────────────────────────────────────────────────
       - key: DATA_SOURCE
+        value: "yahoo"
+      - key: FINNHUB_API_KEY
+        sync: false
+
+      # ── Admin & Security ──────────────────────────────────────────────────
+      - key: ADMIN_SECRET_KEY
+        sync: false
+
+      # ── Monitoring (optional) ─────────────────────────────────────────────
+      - key: SENTRY_DSN
         sync: false

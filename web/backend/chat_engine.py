@@ -1,151 +1,218 @@
 """
-AI Trading Chatbot for Apex Decision Engine.
-Uses Anthropic Claude API with RAG (Retrieval-Augmented Generation) pipeline.
+PRISM — Apex Decision Engine's multi-spectrum market analysis chat engine.
+
+PRISM covers the full trading spectrum: scalp → day → swing → long-term.
+Uses Anthropic prompt caching and per-session history (last 10 messages).
 """
 
 import json
-import os
 import logging
+import os
 from typing import Any, Callable, Dict, List, Optional
 import anthropic  # type: ignore
 from engine.ml_models.uoa_xgboost import UOAModelPipeline  # type: ignore
 
 logger = logging.getLogger(__name__)
 
-CHAT_SYSTEM_PROMPT = """You are a professional Institutional Risk Manager and trading analyst for the Apex Decision Engine (ADE).
+# Per-session conversation history (in-memory, keyed by session_id)
+# Each value is a list of {"role": "user"/"assistant", "content": str}
+_sessions: Dict[str, List[Dict[str, str]]] = {}
+_MAX_HISTORY = 20  # 10 pairs
 
-Your Role:
-Provide data-driven trading intelligence, focusing specifically on Unusual Options Activity (UOA), predictive ML models (XGBoost), and live market data.
+PRISM_SYSTEM_PROMPT = """You are PRISM — the market analysis intelligence for Apex Decision Engine.
 
-Formatting Rules - YOU MUST FORMAT YOUR RESPONSE EXACTLY LIKE THIS:
-### The Smart Money Data
-(Explain the latest UOA anomaly data provided in the context. Discuss volume vs open interest, moneyness, and how smart money is positioned).
+Identity:
+PRISM stands for Predictive Range & Intelligence for Signal Mapping. You analyze markets across every timeframe — from intraday scalps to multi-year investments. You are NOT generic. Every response is grounded in the mathematical data provided to you.
 
-### The Predictive Score
-(Discuss the XGBoost probability score provided in the context. Is it a high-conviction breakout signal? Do the technicals align with the flow?)
+Timeframe coverage:
+- SCALP (0-4hr): RSI extremes (<25/>75), volume spikes >2.5×, momentum divergence
+- DAY TRADE (same session): MACD crossovers, level breaks, UOA same-day expiry
+- SWING (3-10 days): EMA alignment, trend structure, sector rotation, UOA 14-30 DTE
+- LONG-TERM (weeks/months): 200MA position, fundamentals (P/E vs sector, revenue growth), macro regime
 
-### Risk Management (Stop Loss / Take Profit)
-(Provide actionable risk management advice based on the provided price action. Where is the logical stop loss? What is the logical take profit? Consider support/resistance and volatility).
+Personality:
+- Analytical but not robotic. You have a measured confidence.
+- You distinguish between short-term noise and structural signals.
+- You call out when timeframes conflict: "The day trade looks clean, but the weekly is broken."
+- You never give generic advice. If there's no data, say so.
 
-Critical Rules:
-- NEVER give generic financial advice.
-- ONLY base your analysis on the concrete mathematical data provided in the System Prompt Context.
-- Do NOT generate generic responses. If no context is provided, state that you need data to run analysis.
-- End your analysis with: "*This is analysis based on mathematical probabilities, not financial advice.*"
-"""
+Response format (use these sections as headers when relevant):
+### Signal Overview
+(Core verdict + timeframe most relevant to the user's question)
+
+### The Data
+(Specific numbers from the context: UOA, XGBoost score, RSI, volume, etc.)
+
+### Entry & Risk
+(Specific entry zone, stop loss, and take profit — grounded in the data provided. For long-term: valuation entry range.)
+
+### Timeframe Cross-check
+(Brief note on how this signal reads on OTHER timeframes — when relevant)
+
+Rules:
+- ONLY base your analysis on the concrete data provided in the context.
+- Cite specific numbers: "RSI at 34.2", "volume 1.84× average", "P/E at 22 vs sector 28"
+- Never hedge with "monitor closely" or "it depends." Commit and explain your reasoning.
+- For long-term questions: reference fundamentals if provided (P/E, P/B, revenue growth, debt/equity)
+- End every response with a single italicized line: *Analysis based on mathematical data — not financial advice.*"""
+
 
 def extract_ticker(message: str) -> str:
-    """Attempt to extract a ticker symbol from the user's message."""
-    known = ("AAPL", "MSFT", "NVDA", "JPM", "XOM", "GOOGL", "META", "TSLA", "AMZN", "SPY")
-    for w in message.upper().replace('?','').replace('.','').replace(',','').split():
-        if w in known or (len(w) <= 4 and w.isalpha()):
-            if w in known:
-                return w
-    
-    for w in message.upper().split():
-        if len(w) <= 4 and w.isalpha():
+    known = {"AAPL", "MSFT", "NVDA", "JPM", "XOM", "GOOGL", "META", "TSLA", "AMZN", "SPY",
+             "QQQ", "AMD", "NFLX", "BABA", "CRM", "PYPL", "UBER", "COIN", "GME", "AMC"}
+    words = message.upper().replace('?', '').replace('.', '').replace(',', '').split()
+    for w in words:
+        if w in known:
+            return w
+    for w in words:
+        if 2 <= len(w) <= 5 and w.isalpha():
             return w
     return ""
 
+
 def build_rag_context(user_message: str, connector: Any) -> str:
-    """Build the RAG context string by querying local data and the ML model."""
     ticker = extract_ticker(user_message)
-    context_blocks = []
-    
+    blocks = []
+
     uoa_file = connector.data_dir / "uoa_anomalies.json"
     anomalies = []
     try:
         if uoa_file.exists() and uoa_file.stat().st_size > 0:
             with open(uoa_file, "r") as f:
                 data: List[Dict[str, Any]] = json.load(f)
-                if ticker:
-                    anomalies = [a for a in data if a.get("ticker") == ticker]
+                anomalies = [a for a in data if a.get("ticker") == ticker] if ticker else []
                 if not anomalies and data:
-                    anomalies = list(data)[-5:]
+                    anomalies = list(data)[-3:]
     except Exception as e:
-        logger.error(f"Failed to load UOA data: {e}")
-            
-    if not anomalies:
-        context_blocks.append("No recent UOA anomalies found in the local database.")
-    else:
-        context_blocks.append("Recent UOA Anomalies:")
+        logger.error("UOA load failed: %s", e)
+
+    if anomalies:
+        blocks.append("UOA:")
         for a in anomalies[-3:]:
-            context_blocks.append(json.dumps(a))
-            
+            # Compact UOA representation
+            blocks.append(f"{a.get('ticker')} {a.get('type','?')} strike={a.get('strike')} exp={a.get('expiry')} vol={a.get('volume')} oi={a.get('open_interest')}")
+    else:
+        blocks.append("UOA: no recent anomalies")
+
     if anomalies:
         try:
             ml_pipeline = UOAModelPipeline(data_source=os.environ.get("DATA_SOURCE", "mock"))
             ml_pipeline.load_model()
-            
-            latest_anomaly = anomalies[-1]
-            target_ticker = latest_anomaly.get("ticker", ticker)
-            
-            hist = connector.market_data.fetch_ohlc(target_ticker, period="3mo", interval="1d")
+            latest = anomalies[-1]
+            target = latest.get("ticker", ticker)
+            hist = connector.market_data.fetch_ohlc(target, period="3mo", interval="1d")
             series = hist.get("series", [])
-            
             if series:
-                prob = ml_pipeline.predict(latest_anomaly, series)
-                context_blocks.append(f"XGBoost Predictive Score for {target_ticker}: {prob*100:.2f}% probability of 3%+ directional breakout.")
-            else:
-                context_blocks.append(f"Could not fetch history for {target_ticker} to calculate ML score.")
+                prob = ml_pipeline.predict(latest, series)
+                blocks.append(f"XGBoost {target}: {prob*100:.1f}% prob of 3%+ breakout")
         except Exception as e:
-            logger.error(f"Failed to run ML prediction: {e}")
-            context_blocks.append("ML Pipeline temporarily unavailable.")
-            
+            logger.debug("ML prediction unavailable: %s", e)
+
     if ticker:
         try:
             quote = connector.market_data.fetch_quote(ticker)
-            context_blocks.append(f"Live Market Data for {ticker}: {json.dumps(quote)}")
+            p = quote.get("price", "?")
+            chg = quote.get("change_percent", "?")
+            vol = quote.get("volume", "?")
+            blocks.append(f"{ticker}: ${p} ({chg:+.2f}%) vol={vol}")
         except Exception as e:
-            logger.error(f"Failed to fetch market data: {e}")
-            
-    full_context = "\n".join(context_blocks)
-    return full_context
+            logger.debug("Quote fetch failed for %s: %s", ticker, e)
 
-def _demo_reply(user_message: str, get_engine: Callable, connector: Any) -> str:
-    """Smart demo responses when Claude is not configured."""
-    msg = (user_message or "").lower().strip()
-    return "I am the ADE Institutional Risk Manager. Please set the ANTHROPIC_API_KEY in the .env file to enable the RAG Chatbot."
+    # Fundamentals for long-term context
+    if ticker:
+        try:
+            import yfinance as yf  # type: ignore
+            info = yf.Ticker(ticker).info
+            pe   = info.get("trailingPE") or info.get("forwardPE")
+            pb   = info.get("priceToBook")
+            de   = info.get("debtToEquity")
+            rev  = info.get("revenueGrowth")
+            mcap = info.get("marketCap")
+            parts = []
+            if pe:  parts.append(f"P/E={pe:.1f}")
+            if pb:  parts.append(f"P/B={pb:.1f}")
+            if de:  parts.append(f"D/E={de:.1f}")
+            if rev: parts.append(f"rev_growth={rev*100:.1f}%")
+            if mcap: parts.append(f"mcap=${mcap/1e9:.0f}B")
+            if parts:
+                blocks.append(f"Fundamentals: {' | '.join(parts)}")
+        except Exception:
+            pass
+
+    return " | ".join(blocks)
+
+
+def _add_to_history(session_id: str, role: str, content: str) -> None:
+    if session_id not in _sessions:
+        _sessions[session_id] = []
+    _sessions[session_id].append({"role": role, "content": content})
+    # Prune oldest beyond limit
+    if len(_sessions[session_id]) > _MAX_HISTORY:
+        _sessions[session_id] = _sessions[session_id][-_MAX_HISTORY:]
+
 
 async def chat(
     session_id: str,
     message: str,
     signal_context: Optional[Dict[str, Any]] = None,
 ) -> str:
-    """Entry point for AI chat, supports signal context forwarding."""
-    # Note: In a real app, we'd load session history from a DB. 
-    # For this MVP upgrade, we'll focus on the RAG and context integration.
-    
-    # Importing dependencies locally to avoid circular imports / late binding
-    from web.backend.app import connector, get_engine 
+    from web.backend.app import connector  # type: ignore
 
     api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
     if not api_key:
-        return _demo_reply(message, get_engine, connector)
+        return "PRISM offline — ANTHROPIC_API_KEY not configured."
 
     try:
         client = anthropic.Anthropic(api_key=api_key)
-        model_name = os.environ.get("ANTHROPIC_CHAT_MODEL", "claude-sonnet-4-20250514")
-        
-        # Build RAG Context
-        rag_context = build_rag_context(message, connector)
-        
-        # Build System Prompt with optional Signal Context
-        system_prompt = CHAT_SYSTEM_PROMPT
-        if signal_context:
-            system_prompt += f"\n\n--- TARGET SIGNAL CONTEXT ---\n{json.dumps(signal_context, indent=2)}\n"
-            system_prompt += "\nThe user is asking about the specific signal above. Use the provided levels, rationales, and indicators in your analysis.\n"
+        model  = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
 
-        # Create message with Anthropic
+        rag = build_rag_context(message, connector)
+
+        system_blocks: List[Dict[str, Any]] = [
+            {
+                "type": "text",
+                "text": PRISM_SYSTEM_PROMPT,
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
+        if signal_context:
+            system_blocks.append({
+                "type": "text",
+                "text": (
+                    "--- SIGNAL CONTEXT ---\n"
+                    + json.dumps(signal_context, separators=(',', ':'))
+                    + "\nThe user is asking about this specific signal. Use its levels and indicators."
+                ),
+            })
+
+        user_content = f"{message}\n\n[Data: {rag}]"
+
+        history = list(_sessions.get(session_id, []))
+        history.append({"role": "user", "content": user_content})
+
         response = client.messages.create(
-            model=model_name,
-            max_tokens=1500,
-            system=system_prompt,
-            messages=[
-                {"role": "user", "content": f"{message}\n\n[Context: {rag_context}]"}
-            ]
+            model=model,
+            max_tokens=1200,
+            system=system_blocks,
+            messages=history,
         )
-        return response.content[0].text
+
+        reply = response.content[0].text
+
+        # Persist history (store clean message, not the augmented one)
+        _add_to_history(session_id, "user", message)
+        _add_to_history(session_id, "assistant", reply)
+
+        return reply
+
     except Exception as e:
-        logger.exception(f"Claude chat error: {e}")
-        return f"Uplink unstable. Error: {str(e)}"
+        logger.exception("PRISM chat error: %s", e)
+        return f"Analysis uplink error: {str(e)}"
+
+
+def clear_session(session_id: str) -> None:
+    _sessions.pop(session_id, None)
+
+
+def get_history(session_id: str) -> List[Dict[str, str]]:
+    return list(_sessions.get(session_id, []))

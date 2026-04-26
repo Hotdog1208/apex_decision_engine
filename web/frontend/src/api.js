@@ -1,12 +1,23 @@
-// Use /api when frontend proxies to backend (dev). Override for production.
-const API_BASE = import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE || '/api'
+import { supabase } from './lib/supabase'
 import toast from 'react-hot-toast'
 
+// Use /api when frontend proxies to backend (dev). Override for production.
+const API_BASE = import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE || '/api'
+
+// Module-level token cache — updated by Supabase auth state listener.
+let _token = null
+
+supabase.auth.onAuthStateChange((_, session) => {
+  _token = session?.access_token ?? null
+})
+
+// Seed immediately from stored session on module load.
+supabase.auth.getSession().then(({ data: { session } }) => {
+  _token = session?.access_token ?? null
+})
+
 function getAuthHeaders() {
-  const token = typeof localStorage !== 'undefined' ? localStorage.getItem('ade_token') : null
-  const headers = {}
-  if (token) headers['Authorization'] = `Bearer ${token}`
-  return headers
+  return _token ? { Authorization: `Bearer ${_token}` } : {}
 }
 
 async function parseErrorResponse(res) {
@@ -27,7 +38,7 @@ async function fetchApi(path) {
     return res.json()
   } catch (e) {
     if (e.message === 'Failed to fetch' || e.name === 'TypeError') {
-      throw new Error('Backend unreachable. Run .\\run-backend.ps1 in project root.')
+      throw new Error('Backend unreachable. Is the API server running?')
     }
     throw e
   }
@@ -115,8 +126,6 @@ export const api = {
     return res
   },
   exportTrades: () => API_BASE + '/export/trades',
-  login: (email, password) => postApi('/auth/login', { email, password }),
-  signup: (email, password) => postApi('/auth/signup', { email, password }),
   // MVP signal endpoints
   getSignal: (symbol) => fetchApi('/signals/' + encodeURIComponent(symbol)),
   getMvpSignals: () => fetchApi('/signals/batch/mvp'),
@@ -127,12 +136,28 @@ export const api = {
   recordSignalOutcome: (signalId, outcome) => postApi('/signals/outcome', { signal_id: signalId, outcome }),
   getSignalPerformance: () => fetchApi('/signals/performance'),
   regenerateSignal: (symbol) => fetchApi('/signals/' + encodeURIComponent(symbol)),
-  // Track Record
+  // Track Record + accuracy
   getAccuracy: () => fetchApi('/admin/accuracy'),
+  triggerAccuracySweep: (adminKey) => postApi(`/admin/accuracy/sweep?admin_key=${encodeURIComponent(adminKey || '')}`, {}),
   // Refresh a single signal bypassing the 15-min cache
   refreshSignal: (symbol) => fetchApi('/signals/' + encodeURIComponent(symbol) + '?force=true'),
   // Batch signals for custom watchlist
   getBatchSignals: (symbols) => fetchApi('/signals/batch?symbols=' + encodeURIComponent(symbols.join(','))),
+
+  // Stripe billing
+  createCheckoutSession: (tier) => postApi('/create-checkout-session', { tier }),
+  createPortalSession: () => postApi('/create-portal-session', {}),
+
+  // Current user info + tier (from backend JWT validation)
+  getMe: () => fetchApi('/auth/me'),
+
+  // CIPHER Agent
+  getAgentPreferences: () => fetchApi('/agent/preferences'),
+  saveAgentPreferences: (prefs) => postApi('/agent/preferences', prefs),
+  getAgentBrief: () => fetchApi('/agent/brief'),
+  generateAgentBrief: () => postApi('/agent/brief/generate', {}),
+  askAgent: (question, sessionId = 'cipher-default') =>
+    postApi('/agent/ask', { question, session_id: sessionId }),
 }
 
 export function useWebSocket(onMessage) {
@@ -140,13 +165,9 @@ export function useWebSocket(onMessage) {
   if (import.meta.env.VITE_API_URL) {
     wsUrl = import.meta.env.VITE_API_URL.replace(/^http/, 'ws') + '/ws'
   }
-  
-  // Pass token in query per backend requirement
-  const token = typeof localStorage !== 'undefined' ? localStorage.getItem('ade_token') : null
-  if (token) {
-    wsUrl += `?token=${token}`
+  if (_token) {
+    wsUrl += `?token=${_token}`
   }
-
   const ws = new WebSocket(wsUrl)
   ws.onmessage = (e) => {
     try {

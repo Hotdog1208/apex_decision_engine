@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
-import { BarChart3, Target, Award, TrendingUp, TrendingDown, DollarSign } from 'lucide-react'
+import { BarChart3, Target, Award, TrendingUp, TrendingDown, DollarSign, Database, HardDrive } from 'lucide-react'
 import { api } from '../api'
 import PageWrapper from '../components/PageWrapper'
 import GlitchText from '../components/GlitchText'
@@ -63,6 +63,7 @@ export default function TrackRecord() {
     total_signals, recent_entries, earliest_timestamp,
     avg_conf_correct, avg_conf_incorrect,
     avg_pct_change_correct, avg_pct_change_incorrect,
+    source,
   } = stats
 
   const hasEnough  = (evaluated || 0) >= 10
@@ -96,6 +97,10 @@ export default function TrackRecord() {
     },
   ]
 
+  const TF_LABELS = {
+    scalp: 'Scalp', day: 'Day', swing: 'Swing', long: 'Long-term',
+  }
+
   // Recent entries table data
   const recentColumns = [
     {
@@ -109,6 +114,20 @@ export default function TrackRecord() {
     {
       key: 'verdict', label: 'Verdict',
       render: (v) => <VerdictBadge verdict={v} size="sm" />,
+    },
+    {
+      key: 'primary_timeframe', label: 'TF', align: 'center',
+      render: (v) => v ? (
+        <span style={{
+          fontFamily: 'var(--font-data, monospace)', fontSize: '8px', letterSpacing: '0.10em',
+          padding: '2px 6px', textTransform: 'uppercase',
+          background: v === 'scalp' ? 'rgba(0,212,255,0.08)' : v === 'long' ? 'rgba(204,255,0,0.08)' : 'rgba(255,255,255,0.05)',
+          border: v === 'scalp' ? '1px solid rgba(0,212,255,0.18)' : v === 'long' ? '1px solid rgba(204,255,0,0.18)' : '1px solid rgba(255,255,255,0.08)',
+          color: v === 'scalp' ? '#00D4FF' : v === 'long' ? '#CCFF00' : 'rgba(255,255,255,0.45)',
+        }}>
+          {TF_LABELS[v] || v}
+        </span>
+      ) : <span style={{ color: 'rgba(255,255,255,0.18)', fontFamily: 'var(--font-data, monospace)', fontSize: '9px' }}>—</span>,
     },
     {
       key: 'confidence', label: 'Conf.', align: 'right',
@@ -155,6 +174,21 @@ export default function TrackRecord() {
             </span>
             <span style={{ fontFamily: 'var(--font-data, monospace)', fontSize: '9px', color: 'rgba(255,255,255,0.18)', letterSpacing: '0.06em' }}>
               · Track Record Terminal
+            </span>
+            {/* Data source badge */}
+            <span
+              title={source === 'supabase' ? 'Data persisted in Supabase — survives server restarts' : 'Data from local JSON — resets on server restart'}
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: '4px',
+                fontFamily: 'var(--font-data, monospace)', fontSize: '8px',
+                letterSpacing: '0.12em', textTransform: 'uppercase',
+                padding: '2px 7px',
+                background: source === 'supabase' ? 'rgba(0,255,136,0.06)' : 'rgba(255,234,0,0.06)',
+                border: source === 'supabase' ? '1px solid rgba(0,255,136,0.18)' : '1px solid rgba(255,234,0,0.18)',
+                color: source === 'supabase' ? '#00FF88' : '#FFEA00',
+              }}>
+              {source === 'supabase' ? <Database size={8} /> : <HardDrive size={8} />}
+              {source === 'supabase' ? 'Supabase' : 'Local'}
             </span>
           </div>
           <GlitchText as="h1" text="ADE Track Record" className="text-4xl font-display font-black text-white" />
@@ -233,7 +267,7 @@ export default function TrackRecord() {
           <AccuracyBar
             value={accuracy_pct || 0}
             label="Directional Accuracy"
-            subtitle="1-3 day forward return window"
+            subtitle="3-day forward return window (PRISM multi-timeframe)"
             showThreshold
           />
         )}

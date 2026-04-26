@@ -22,7 +22,25 @@ from fastapi.middleware.cors import CORSMiddleware  # type: ignore
 from fastapi.responses import JSONResponse  # type: ignore
 from pydantic import BaseModel  # type: ignore
 
+import asyncio
 import os
+
+# Sentry — initialize early, before routes, only if DSN is set
+_SENTRY_DSN = os.environ.get("SENTRY_DSN", "")
+if _SENTRY_DSN:
+    try:
+        import sentry_sdk
+        from sentry_sdk.integrations.fastapi import FastApiIntegration
+        from sentry_sdk.integrations.starlette import StarletteIntegration
+        sentry_sdk.init(
+            dsn=_SENTRY_DSN,
+            integrations=[StarletteIntegration(), FastApiIntegration()],
+            traces_sample_rate=0.05,
+            send_default_pii=False,
+        )
+    except ImportError:
+        pass  # sentry-sdk not installed — silently skip
+
 from config.system_config import get_default_system_config  # type: ignore
 from engine.core.decision_engine import DecisionEngine  # type: ignore
 from engine.core.performance_engine import PerformanceEngine  # type: ignore
@@ -56,7 +74,31 @@ app = FastAPI(
     version="1.0.0",
 )
 
-cors_origins_str = os.environ.get("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173,https://apex-decision-engine.vercel.app,https://*.vercel.app")
+
+# ── Startup: configure signal logger + launch background accuracy sweep ────────
+async def _accuracy_sweep_loop() -> None:
+    """Runs the accuracy evaluation sweep every 4 hours. Starts on app startup."""
+    from web.backend import signal_logger  # type: ignore
+    while True:
+        try:
+            count = await signal_logger.run_accuracy_sweep()
+            if count:
+                logger.info("Background accuracy sweep: %d signals evaluated.", count)
+        except Exception as e:
+            logger.error("Background accuracy sweep error: %s", e)
+        await asyncio.sleep(4 * 3600)
+
+
+@app.on_event("startup")
+async def _startup() -> None:
+    from web.backend import signal_logger  # type: ignore
+    signal_logger.configure(
+        os.environ.get("SUPABASE_URL", ""),
+        os.environ.get("SUPABASE_SERVICE_ROLE_KEY", ""),
+    )
+    asyncio.create_task(_accuracy_sweep_loop())
+
+cors_origins_str = os.environ.get("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173,https://apex-decision-engine.vercel.app")
 origins = [o.strip() for o in cors_origins_str.split(",") if o.strip()]
 
 app.add_middleware(
@@ -78,9 +120,36 @@ async def security_headers(request: Request, call_next):
     return response
 
 import time
+import re
 from collections import defaultdict
 auth_rate_limits = defaultdict(list)
 signal_rate_limits: Dict[str, List[float]] = defaultdict(list)
+# Per-user chat rate limits: {user_email: [timestamps]}  — rolling 24-hour window
+chat_rate_limits: Dict[str, List[float]] = defaultdict(list)
+
+# Chat daily limits by tier
+_CHAT_DAILY_LIMITS = {"free": 0, "edge": 0, "alpha": 100, "apex": 500}
+
+def check_chat_rate_limit(user_email: str, tier: str) -> None:
+    """Enforce per-user daily chat message limits by tier."""
+    limit = _CHAT_DAILY_LIMITS.get(tier, 0)
+    if limit == 0:
+        raise HTTPException(status_code=403, detail={"error": "tier_required", "message": "PRISM chat requires ALPHA or APEX subscription."})
+    now = time.time()
+    day = 86400  # 24 hours
+    chat_rate_limits[user_email] = [t for t in chat_rate_limits[user_email] if now - t < day]
+    if len(chat_rate_limits[user_email]) >= limit:
+        raise HTTPException(
+            status_code=429,
+            detail={"error": "chat_limit_reached", "message": f"Daily chat limit of {limit} messages reached for {tier.upper()} tier."}
+        )
+    chat_rate_limits[user_email].append(now)
+
+def sanitize_message(text: str, max_length: int = 2000) -> str:
+    """Strip HTML tags, normalize whitespace, and enforce max length."""
+    text = re.sub(r'<[^>]+>', '', text)   # strip HTML
+    text = text.strip()
+    return text[:max_length]
 
 def check_rate_limit(request: Request):
     ip = request.client.host if request.client else "unknown"
@@ -258,39 +327,84 @@ async def startup():
     logger.info("=== ADE backend ready ===")
 
 
-# --- Auth components needed by endpoints ---
+# --- Supabase JWT Auth ---
 from datetime import datetime, timedelta
 from jose import JWTError, jwt  # type: ignore
-from passlib.context import CryptContext  # type: ignore
-
-SECRET_KEY = os.environ.get("ADE_SECRET_KEY", "ade-dev-secret-change-in-production")
-if len(SECRET_KEY) < 32:
-    raise ValueError("ADE_SECRET_KEY must be at least 32 characters long.")
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60
-REFRESH_TOKEN_EXPIRE_DAYS = 7
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 from fastapi.security import OAuth2PasswordBearer
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
 
-async def get_current_user(token: str = Depends(oauth2_scheme)):
+SUPABASE_JWT_SECRET       = os.environ.get("SUPABASE_JWT_SECRET", "")
+SUPABASE_URL              = os.environ.get("SUPABASE_URL", "")
+SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+
+# --- Stripe ---
+STRIPE_SECRET_KEY     = os.environ.get("STRIPE_SECRET_KEY", "")
+STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
+APP_URL               = os.environ.get("APP_URL", "https://apex-decision-engine.vercel.app")
+
+# Map Stripe price IDs → ADE tier names
+_STRIPE_PRICE_MAP: Dict[str, str] = {
+    k: v for k, v in {
+        os.environ.get("STRIPE_PRICE_EDGE",  ""): "edge",
+        os.environ.get("STRIPE_PRICE_ALPHA", ""): "alpha",
+        os.environ.get("STRIPE_PRICE_APEX",  ""): "apex",
+    }.items() if k
+}
+
+if not SUPABASE_JWT_SECRET:
+    logger.warning("SUPABASE_JWT_SECRET not set — all authenticated API requests will return 503.")
+
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login", auto_error=False)
+
+
+async def _fetch_tier_from_supabase(user_id: str) -> str:
+    """Query public.users in Supabase for the user's subscription tier."""
+    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
+        return "free"
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        email: str = payload.get("sub")
-        if email is None:
-            raise HTTPException(status_code=401, detail="Invalid auth token")
+        import httpx
+        url = f"{SUPABASE_URL}/rest/v1/users?user_id=eq.{user_id}&select=tier&limit=1"
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(url, headers={
+                "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
+                "apikey": SUPABASE_SERVICE_ROLE_KEY,
+            })
+        if resp.status_code == 200:
+            data = resp.json()
+            if data:
+                return data[0].get("tier", "free")
+    except Exception as e:
+        logger.warning("Supabase tier lookup failed for %s: %s", user_id, e)
+    return "free"
+
+
+async def get_current_user(token: str = Depends(oauth2_scheme)) -> str:
+    """Validate Supabase JWT and return the user's email. Raises 401 if invalid."""
+    if not token:
+        raise HTTPException(status_code=401, detail="Authorization header required")
+    if not SUPABASE_JWT_SECRET:
+        raise HTTPException(status_code=503, detail="Auth not configured — set SUPABASE_JWT_SECRET on the server")
+    try:
+        payload = jwt.decode(token, SUPABASE_JWT_SECRET, algorithms=["HS256"], audience="authenticated")
+        email: str = payload.get("email", "")
+        user_id: str = payload.get("sub", "")
+        if not email or not user_id:
+            raise HTTPException(status_code=401, detail="Invalid auth token — missing claims")
+        # Populate in-memory tier cache on first encounter
+        if email not in users_db:
+            tier = await _fetch_tier_from_supabase(user_id)
+            users_db[email] = {"email": email, "tier": tier, "supabase_id": user_id}
         return email
     except JWTError:
-        raise HTTPException(status_code=401, detail="Invalid auth token")
+        raise HTTPException(status_code=401, detail="Invalid or expired auth token")
 
 
 def _safe_get_user(token: Optional[str] = None) -> Optional[str]:
     """Return user email without raising — used for optional-auth endpoints."""
-    if not token:
+    if not token or not SUPABASE_JWT_SECRET:
         return None
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        return payload.get("sub")
+        payload = jwt.decode(token, SUPABASE_JWT_SECRET, algorithms=["HS256"], audience="authenticated")
+        return payload.get("email")
     except Exception:
         return None
 
@@ -300,8 +414,7 @@ async def get_optional_user(request: Request) -> Optional[str]:
     auth = request.headers.get("Authorization", "")
     if not auth.startswith("Bearer "):
         return None
-    token = auth[len("Bearer "):]
-    return _safe_get_user(token)
+    return _safe_get_user(auth[len("Bearer "):])
 
 
 # --- Routes ---
@@ -520,11 +633,24 @@ async def get_signal_performance() -> Dict[str, Any]:
 
 @app.get("/admin/accuracy")
 async def get_accuracy_dashboard() -> Dict[str, Any]:
-    """Return accuracy + PnL stats from paper trading log. Powers the track record page."""
+    """
+    Return accuracy stats for the Track Record page.
+    Prefers Supabase (persistent) and falls back to local PaperTrader JSON.
+    """
     try:
+        from web.backend import signal_logger  # type: ignore
+        if signal_logger._ok():
+            stats = await signal_logger.get_accuracy_stats()
+            # Merge PnL stats from local paper trader (same math, just for the pnl_stats field)
+            try:
+                pnl = paper_trader.get_pnl_stats()
+            except Exception:
+                pnl = {}
+            return {**stats, "pnl_stats": pnl}
+        # Fallback: local JSON (ephemeral but always available)
         stats = paper_trader.get_stats()
         pnl   = paper_trader.get_pnl_stats()
-        return {**stats, "pnl_stats": pnl}
+        return {**stats, "pnl_stats": pnl, "source": "local_json"}
     except Exception as e:
         logger.error("Accuracy stats failed: %s", e)
         return {
@@ -532,6 +658,20 @@ async def get_accuracy_dashboard() -> Dict[str, Any]:
             "evaluated": 0, "correct": 0, "accuracy_pct": 0,
             "by_verdict": {}, "recent_entries": [],
         }
+
+
+@app.post("/admin/accuracy/sweep")
+async def trigger_accuracy_sweep(admin_key: str = "") -> Dict[str, Any]:
+    """Manually trigger the accuracy evaluation sweep (admin only)."""
+    _admin_key = os.environ.get("ADMIN_SECRET_KEY", "")
+    if _admin_key and admin_key != _admin_key:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    try:
+        from web.backend import signal_logger  # type: ignore
+        count = await signal_logger.run_accuracy_sweep()
+        return {"evaluated": count, "status": "ok"}
+    except Exception as e:
+        return {"error": str(e), "evaluated": 0}
 
 
 @app.get("/chart/{symbol}")
@@ -553,29 +693,42 @@ async def get_chart_data(symbol: str, period: str = "3mo", interval: str = "1d")
 
 # --- Signal Engine with Claude ---
 
-SIGNAL_SYSTEM_PROMPT = """You are ADE's signal reasoning engine. You receive structured quantitative output from ADE's multi-factor scoring model. Your job is synthesis and commitment — not computation. The math is already done.
+SIGNAL_SYSTEM_PROMPT = """You are PRISM — ADE's multi-spectrum signal intelligence engine.
+
+You receive structured quantitative output from ADE's multi-factor scoring model. Your job is synthesis and commitment across ALL timeframes — not computation. The math is done; you interpret it.
+
+TIMEFRAME CLASSIFICATION — select the DOMINANT timeframe from the data:
+- scalp (0-4hr): RSI extreme (<25 or >75), volume spike >2.5×, sharp momentum divergence
+- day (same session): MACD crossover, VWAP level break, volume 1.5-2.5×, same-day UOA
+- swing (3-10 days): EMA alignment, clean trend structure, UOA with 14-45 DTE, sector momentum
+- long (weeks/months): 200MA position, fundamental valuation (P/E vs sector), macro regime, earnings setup
 
 Rules:
-1. Accept the quantitative verdict as your starting point. You may affirm or push back by ONE tier (e.g. BUY→STRONG_BUY or BUY→WATCH) only if a specific indicator value gives you strong cause.
-2. Verdict must be exactly one of: STRONG_BUY, BUY, WATCH, AVOID, STRONG_AVOID
-3. Confidence must be a 0-100 integer. Start from the composite_score provided and adjust ±10 max.
-4. You MUST name the single lead_signal driving the call in "lead_signal" — use the one provided.
-5. You MUST name the single biggest risk to the call in "bear_case" — be specific with an indicator value.
-6. Cite at least 3 specific indicator values from the input (e.g. "RSI at 34.2", "MACD histogram +0.41", "volume 1.84× avg").
-7. Never hedge. Never say "monitor closely", "wait and see", or "it depends". Commit.
-8. bull_case and bear_case must each be exactly one sentence with at least one specific number.
-9. Output valid JSON only. No markdown. No preamble. No trailing text.
+1. Accept the quantitative verdict as starting point. Push back ONE tier max — only if a specific number justifies it.
+2. Verdict: exactly one of STRONG_BUY, BUY, WATCH, AVOID, STRONG_AVOID
+3. Confidence: integer 0-100, start from composite_score, adjust ±10 max.
+4. lead_signal: use the one provided or the single dominant indicator you identify.
+5. bear_case: name the single biggest risk with a specific number.
+6. key_indicators: cite ≥3 specific values (e.g. "RSI 34.2 OVERSOLD", "MACD hist +0.41", "vol 1.84× avg").
+7. Never hedge. No "monitor closely", "wait and see", or "it depends." Commit.
+8. bull_case and bear_case: exactly one sentence each, with ≥1 specific number.
+9. scalp_note: one sentence for intraday traders — entry trigger or "No intraday edge."
+10. long_note: one sentence using fundamentals if provided — or "Insufficient fundamental data."
+11. Output valid JSON only. No markdown. No preamble. No trailing text.
 
 Output schema (fill every field):
 {
   "verdict": "BUY",
   "confidence": 72,
-  "timeframe": "1-3 days",
-  "lead_signal": "exact string from input lead_signal",
-  "bull_case": "One sentence citing a specific indicator value.",
-  "bear_case": "One sentence naming the specific risk with a value.",
-  "key_indicators": ["RSI at 34.2 (OVERSOLD)", "MACD histogram +0.41 (BULLISH)", "volume 1.84× average"],
-  "reasoning": "2-3 sentence paragraph. Reference specific numbers. State which factor dominates and why. Do not hedge."
+  "primary_timeframe": "swing",
+  "timeframe_label": "Swing Trade (3-10 days)",
+  "lead_signal": "exact string from input",
+  "bull_case": "One sentence with ≥1 specific number.",
+  "bear_case": "One sentence naming the risk with a specific value.",
+  "key_indicators": ["RSI 34.2 OVERSOLD", "MACD hist +0.41 BULLISH", "vol 1.84× avg"],
+  "reasoning": "2-3 sentences. Cite numbers. State what dominates and why. No hedging.",
+  "scalp_note": "Intraday: [entry trigger or No intraday edge]",
+  "long_note": "Long-term: [fundamental/macro note or Insufficient fundamental data]"
 }"""
 
 _REGIME_CACHE: Dict[str, Any] = {"data": None, "timestamp": 0}
@@ -596,6 +749,15 @@ def get_cached_regime(connector: Any) -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"Regime detection failed: {e}")
         return {"regime": "NEUTRAL", "spy_vs_200ma": 0, "spy_rsi": 50, "vix_level": "NORMAL", "regime_note": "Regime undetected"}
+
+async def _log_signal_supabase(signal: Dict[str, Any], user_id: Optional[str]) -> None:
+    """Non-blocking Supabase signal write — never raises."""
+    try:
+        from web.backend import signal_logger  # type: ignore
+        await signal_logger.log_signal(signal, user_id)
+    except Exception:
+        pass
+
 
 async def _generate_claude_signal(
     sym: str,
@@ -657,43 +819,75 @@ async def _generate_claude_signal(
 
         price = quote.get("price") or 0
 
-        # 5. Claude reasoning (Task 2)
+        # 5. Fundamentals (lightweight — for long-term signal layer)
+        fundamentals: Dict[str, Any] = {}
+        try:
+            import yfinance as yf  # type: ignore
+            info = yf.Ticker(sym).info
+            pe  = info.get("trailingPE") or info.get("forwardPE")
+            pb  = info.get("priceToBook")
+            de  = info.get("debtToEquity")
+            rg  = info.get("revenueGrowth")
+            mc  = info.get("marketCap")
+            sec = info.get("sector")
+            if any(x is not None for x in [pe, pb, de, rg, mc]):
+                fundamentals = {k: v for k, v in {
+                    "pe": round(pe, 1) if pe else None,
+                    "pb": round(pb, 1) if pb else None,
+                    "de": round(de, 1) if de else None,
+                    "rev_growth_pct": round(rg * 100, 1) if rg else None,
+                    "mcap_b": round(mc / 1e9, 1) if mc else None,
+                    "sector": sec,
+                }.items() if v is not None}
+        except Exception:
+            pass  # fundamentals are enrichment only — never block a signal
+
+        # 6. Claude reasoning with PRISM
         api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
         signal: Dict[str, Any] = {}
 
         if api_key:
             try:
+                ind = indicators
                 context_for_claude = {
-                    "symbol":           sym,
-                    "price":            price,
-                    "composite_score":  apex_scores["composite_score"],
-                    "suggested_verdict": apex_scores["verdict"],
-                    "lead_signal":      apex_scores["lead_signal"],
-                    "factor_scores":    apex_scores["factor_scores"],
-                    "key_signals":      apex_scores["key_signals"],
-                    "uoa_note":         apex_scores["uoa_note"],
-                    "regime_applied":   apex_scores["regime_applied"],
-                    "news_sentiment":   {"overall": news_sentiment, "counts": news_counts},
-                    "raw_indicators": {
-                        "rsi":           indicators.get("rsi", {}),
-                        "macd":          indicators.get("macd", {}),
-                        "ema":           indicators.get("ema", {}),
-                        "volume_ratio":  indicators.get("volume_ratio"),
-                        "range_52w":     indicators.get("range_52w", {}),
-                        "bollinger_pos": indicators.get("bollinger", {}).get("position"),
+                    "sym":    sym,
+                    "px":     price,
+                    "score":  apex_scores["composite_score"],
+                    "verdict": apex_scores["verdict"],
+                    "lead":   apex_scores["lead_signal"],
+                    "factors": apex_scores["factor_scores"],
+                    "signals": apex_scores["key_signals"],
+                    "uoa":    apex_scores["uoa_note"],
+                    "regime": apex_scores["regime_applied"],
+                    "news":   {"sentiment": news_sentiment, "pos": news_counts["pos"], "neg": news_counts["neg"]},
+                    "ind": {
+                        "rsi":    ind.get("rsi", {}),
+                        "macd":   ind.get("macd", {}),
+                        "ema":    ind.get("ema", {}),
+                        "volr":   ind.get("volume_ratio"),
+                        "52w":    ind.get("range_52w", {}),
+                        "bb_pos": ind.get("bollinger", {}).get("position"),
                     },
                 }
+                if fundamentals:
+                    context_for_claude["fund"] = fundamentals
 
                 client = anthropic.Anthropic(api_key=api_key)
                 response = client.messages.create(
-                    model="claude-sonnet-4-20250514",
-                    max_tokens=500,
-                    system=SIGNAL_SYSTEM_PROMPT,
+                    model=os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-20250514"),
+                    max_tokens=520,
+                    system=[
+                        {
+                            "type": "text",
+                            "text": SIGNAL_SYSTEM_PROMPT,
+                            "cache_control": {"type": "ephemeral"},
+                        }
+                    ],
                     messages=[{
                         "role": "user",
                         "content": (
-                            f"Generate signal for {sym}. Quantitative input:\n"
-                            f"{json.dumps(context_for_claude, indent=2)}"
+                            f"Signal {sym}: "
+                            f"{json.dumps(context_for_claude, separators=(',', ':'))}"
                         ),
                     }],
                 )
@@ -721,12 +915,21 @@ async def _generate_claude_signal(
             signal["reasoning"] = (
                 f"{apex_scores['verdict']} signal at {price}. "
                 f"Lead factor: {apex_scores['lead_signal']}. "
-                f"Regime: {regime}. Composite score: {apex_scores['composite_score']}/100."
+                f"Regime: {regime}. Score: {apex_scores['composite_score']}/100."
             )
         if not signal.get("bull_case"):
             signal["bull_case"] = apex_scores["key_signals"][0] if apex_scores["key_signals"] else "—"
         if not signal.get("bear_case"):
             signal["bear_case"] = f"Adverse move against {apex_scores['regime_applied']} context"
+        if not signal.get("primary_timeframe"):
+            signal["primary_timeframe"] = "swing"
+        if not signal.get("timeframe_label"):
+            signal["timeframe_label"] = "Swing Trade (3-10 days)"
+        signal.setdefault("scalp_note", "No intraday edge.")
+        signal.setdefault("long_note", "Insufficient fundamental data.")
+        # Backward compat: Dashboard.jsx reads .timeframe
+        if not signal.get("timeframe"):
+            signal["timeframe"] = signal.get("timeframe_label", "Swing Trade (3-10 days)")
 
         # Attach metadata
         signal["symbol"]           = sym
@@ -762,8 +965,12 @@ async def _generate_claude_signal(
         else:
             signal["calibrated_label"] = "Uncalibrated — building track record"
 
-        # 8. Log to paper trade (skip duplicates within 15 min for same symbol+verdict)
+        # 8. Log to paper trade (local JSON, skip duplicates)
         paper_trader.log_signal(signal)
+
+        # 8b. Fire-and-forget write to Supabase signal_log (persistent across restarts)
+        _uid = users_db.get(user_email, {}).get("supabase_id") if user_email != "anonymous" else None
+        asyncio.create_task(_log_signal_supabase(signal, _uid))
 
         # 9. Cache
         signal_cache[cache_key] = {"timestamp": now, "data": signal}
@@ -984,7 +1191,10 @@ async def websocket_endpoint(websocket: WebSocket):
         await websocket.close(code=1008)
         return
     try:
-        jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        if not SUPABASE_JWT_SECRET:
+            await websocket.close(code=1008)
+            return
+        jwt.decode(token, SUPABASE_JWT_SECRET, algorithms=["HS256"], audience="authenticated")
     except JWTError:
         await websocket.close(code=1008)
         return
@@ -1004,39 +1214,20 @@ async def websocket_endpoint(websocket: WebSocket):
             pass
 
 
-# Auth routes below
-
-def create_refresh_token(data: dict) -> str:
-    to_encode = data.copy()
-    expire = datetime.utcnow() + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
-    to_encode.update({"exp": expire})
-    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-
-
-def create_access_token(data: dict) -> str:
-    to_encode = data.copy()
-    expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    to_encode.update({"exp": expire})
-    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-
-
-class UserCreate(BaseModel):
-    email: str
-    password: str
-
-
-class UserLogin(BaseModel):
-    email: str
-    password: str
+# ── Auth management routes ──────────────────────────────────────────────────
+# Authentication is handled by Supabase on the frontend.
+# The backend only validates Supabase JWTs; it does not issue its own tokens.
 
 
 @app.get("/admin/set-tier")
-async def admin_set_tier(user_id: str, tier: str) -> Dict[str, Any]:
-    """Manually set a user's tier. Admin only — no auth guard (add one before production)."""
+async def admin_set_tier(user_id: str, tier: str, admin_key: str = "") -> Dict[str, Any]:
+    """Manually set a user's tier in the local cache (for testing). Production writes go via Stripe webhook."""
+    _admin_key = os.environ.get("ADMIN_SECRET_KEY", "")
+    if _admin_key and admin_key != _admin_key:
+        raise HTTPException(status_code=403, detail="Forbidden")
     if tier not in VALID_TIERS:
         raise HTTPException(status_code=400, detail=f"Invalid tier. Valid: {sorted(VALID_TIERS)}")
-    if user_id not in users_db:
-        raise HTTPException(status_code=404, detail="User not found")
+    users_db[user_id] = users_db.get(user_id, {"email": user_id})
     users_db[user_id]["tier"] = tier
     logger.info("Admin: set tier for %s → %s", user_id, tier)
     return {"status": "updated", "user_id": user_id, "tier": tier}
@@ -1048,44 +1239,225 @@ async def get_tier_config() -> Dict[str, Any]:
     return {"tiers": TIER_LIMITS}
 
 
-@app.post("/auth/signup", dependencies=[Depends(check_rate_limit)])
-async def signup(body: UserCreate) -> Dict[str, Any]:
-    """Register new user (in-memory). Default tier: free."""
-    if body.email in users_db:
-        return {"error": "Email already registered"}
-    users_db[body.email] = {
-        "email": body.email,
-        "hashed_password": pwd_context.hash(body.password),
-        "tier": "free",      # default tier
-    }
-    token = create_access_token({"sub": body.email})
-    return {"access_token": token, "token_type": "bearer", "user": {"email": body.email, "tier": "free"}}
+# ── Stripe helpers ─────────────────────────────────────────────────────────────
+
+def _find_email_by_stripe_customer(stripe_customer_id: str) -> Optional[str]:
+    """Search in-memory cache for a user with the given Stripe customer ID."""
+    for email, data in users_db.items():
+        if data.get("stripe_customer_id") == stripe_customer_id:
+            return email
+    return None
 
 
-@app.post("/auth/refresh")
-async def refresh_token(token: str = Depends(oauth2_scheme)) -> Dict[str, Any]:
+async def _update_supabase_subscription(
+    user_id: str,
+    tier: str,
+    stripe_customer_id: str,
+    subscription_status: str,
+    current_period_end: Optional[int] = None,
+) -> None:
+    """Write subscription state to Supabase public.users (service-role access)."""
+    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
+        logger.warning("Supabase not configured — tier update not persisted for user %s", user_id)
+        return
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        email: str = payload.get("sub")
-        if email is None:
-            raise HTTPException(status_code=401, detail="Invalid token")
-        new_token = create_access_token({"sub": email})
-        return {"access_token": new_token, "token_type": "bearer"}
-    except JWTError:
-        raise HTTPException(status_code=401, detail="Invalid token")
+        import httpx
+        payload: Dict[str, Any] = {
+            "tier": tier,
+            "stripe_customer_id": stripe_customer_id,
+            "subscription_status": subscription_status,
+        }
+        if current_period_end:
+            from datetime import timezone
+            payload["current_period_end"] = (
+                datetime.fromtimestamp(current_period_end, tz=timezone.utc).isoformat()
+            )
+        url = f"{SUPABASE_URL}/rest/v1/users?user_id=eq.{user_id}"
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.patch(
+                url,
+                json=payload,
+                headers={
+                    "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
+                    "apikey": SUPABASE_SERVICE_ROLE_KEY,
+                    "Content-Type": "application/json",
+                    "Prefer": "return=minimal",
+                },
+            )
+        if resp.status_code not in (200, 204):
+            logger.error("Supabase tier update failed for %s: %s", user_id, resp.text)
+        else:
+            logger.info("Supabase tier updated: user=%s tier=%s status=%s", user_id, tier, subscription_status)
+    except Exception as e:
+        logger.error("_update_supabase_subscription error: %s", e)
 
-@app.post("/auth/login", dependencies=[Depends(check_rate_limit)])
-async def login(body: UserLogin) -> Dict[str, Any]:
-    """Login (in-memory)."""
-    user = users_db.get(body.email)
-    if not user or not pwd_context.verify(body.password, user["hashed_password"]):
-        return {"error": "Invalid email or password"}
-    # Ensure tier is set for existing users (migration: default to free)
-    if "tier" not in user:
-        user["tier"] = "free"
-    tier = user.get("tier", "free")
-    token = create_access_token({"sub": body.email})
-    return {"access_token": token, "token_type": "bearer", "user": {"email": body.email, "tier": tier}}
+
+# ── Stripe endpoints ────────────────────────────────────────────────────────────
+
+_TIER_PRICE_ENV = {
+    "edge":  "STRIPE_PRICE_EDGE",
+    "alpha": "STRIPE_PRICE_ALPHA",
+    "apex":  "STRIPE_PRICE_APEX",
+}
+
+class CheckoutRequest(BaseModel):
+    tier: str
+
+
+@app.post("/create-checkout-session")
+async def create_checkout_session(
+    body: CheckoutRequest,
+    user: str = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """Create a Stripe Checkout session for the selected subscription tier."""
+    if not STRIPE_SECRET_KEY:
+        raise HTTPException(status_code=503, detail="Payment service not configured")
+    if body.tier not in ("edge", "alpha", "apex"):
+        raise HTTPException(status_code=400, detail="Invalid tier")
+
+    price_env_key = _TIER_PRICE_ENV[body.tier]
+    price_id = os.environ.get(price_env_key, "")
+    if not price_id:
+        raise HTTPException(status_code=503, detail=f"{price_env_key} not set on server")
+
+    import stripe  # type: ignore
+    stripe.api_key = STRIPE_SECRET_KEY
+
+    user_data = users_db.get(user, {})
+    supabase_id = user_data.get("supabase_id", "")
+    stripe_customer_id = user_data.get("stripe_customer_id") or None
+
+    try:
+        session = stripe.checkout.Session.create(
+            mode="subscription",
+            line_items=[{"price": price_id, "quantity": 1}],
+            client_reference_id=supabase_id or user,
+            customer=stripe_customer_id,
+            customer_email=user if not stripe_customer_id else None,
+            success_url=f"{APP_URL}/account?checkout=success",
+            cancel_url=f"{APP_URL}/pricing",
+            metadata={"supabase_user_id": supabase_id, "email": user, "tier": body.tier},
+            subscription_data={"metadata": {"email": user, "tier": body.tier}},
+        )
+        return {"url": session.url}
+    except Exception as e:
+        logger.error("Stripe checkout session failed: %s", e)
+        raise HTTPException(status_code=502, detail="Could not create checkout session")
+
+
+@app.post("/create-portal-session")
+async def create_portal_session(user: str = Depends(get_current_user)) -> Dict[str, Any]:
+    """Open the Stripe Customer Portal so users can cancel, upgrade, or update payment info."""
+    if not STRIPE_SECRET_KEY:
+        raise HTTPException(status_code=503, detail="Payment service not configured")
+
+    user_data = users_db.get(user, {})
+    stripe_customer_id = user_data.get("stripe_customer_id")
+    if not stripe_customer_id:
+        raise HTTPException(status_code=400, detail="No active subscription found for this account")
+
+    import stripe  # type: ignore
+    stripe.api_key = STRIPE_SECRET_KEY
+
+    try:
+        portal = stripe.billing_portal.Session.create(
+            customer=stripe_customer_id,
+            return_url=f"{APP_URL}/account",
+        )
+        return {"url": portal.url}
+    except Exception as e:
+        logger.error("Stripe portal session failed: %s", e)
+        raise HTTPException(status_code=502, detail="Could not open billing portal")
+
+
+@app.post("/stripe-webhook")
+async def stripe_webhook(request: Request) -> Dict[str, Any]:
+    """Receive and process Stripe webhook events. Validates Stripe-Signature before acting."""
+    if not STRIPE_WEBHOOK_SECRET or not STRIPE_SECRET_KEY:
+        raise HTTPException(status_code=503, detail="Webhook not configured")
+
+    import stripe  # type: ignore
+    stripe.api_key = STRIPE_SECRET_KEY
+
+    raw_body = await request.body()
+    sig = request.headers.get("stripe-signature", "")
+
+    try:
+        event = stripe.Webhook.construct_event(raw_body, sig, STRIPE_WEBHOOK_SECRET)
+    except stripe.error.SignatureVerificationError:
+        logger.warning("Stripe webhook: invalid signature")
+        raise HTTPException(status_code=400, detail="Invalid Stripe signature")
+    except Exception as e:
+        logger.error("Stripe webhook parse error: %s", e)
+        raise HTTPException(status_code=400, detail="Malformed event")
+
+    evt_type = event["type"]
+    logger.info("Stripe webhook received: %s", evt_type)
+
+    if evt_type == "checkout.session.completed":
+        session = event["data"]["object"]
+        supabase_id = session.get("client_reference_id", "") or session.get("metadata", {}).get("supabase_user_id", "")
+        email       = session.get("metadata", {}).get("email", "")
+        stripe_cust = session.get("customer", "")
+        sub_id      = session.get("subscription", "")
+        tier        = "edge"  # default to cheapest paid tier
+
+        if sub_id:
+            try:
+                sub      = stripe.Subscription.retrieve(sub_id)
+                price_id = sub["items"]["data"][0]["price"]["id"] if sub["items"]["data"] else ""
+                tier     = _STRIPE_PRICE_MAP.get(price_id, "edge")
+                period_end = sub.get("current_period_end")
+            except Exception as sub_err:
+                logger.error("Could not retrieve subscription %s: %s", sub_id, sub_err)
+                period_end = None
+        else:
+            period_end = None
+
+        if supabase_id:
+            await _update_supabase_subscription(supabase_id, tier, stripe_cust, "active", period_end)
+
+        # Refresh in-memory cache so next request is instant
+        if email and email in users_db:
+            users_db[email]["tier"] = tier
+            users_db[email]["stripe_customer_id"] = stripe_cust
+
+    elif evt_type in ("customer.subscription.deleted",):
+        sub = event["data"]["object"]
+        stripe_cust = sub.get("customer", "")
+        email = _find_email_by_stripe_customer(stripe_cust)
+        supabase_id = users_db.get(email, {}).get("supabase_id", "") if email else ""
+
+        if supabase_id:
+            await _update_supabase_subscription(supabase_id, "free", stripe_cust, "cancelled")
+        if email and email in users_db:
+            users_db[email]["tier"] = "free"
+
+    elif evt_type == "customer.subscription.updated":
+        sub = event["data"]["object"]
+        stripe_cust = sub.get("customer", "")
+        status      = sub.get("status", "")
+        price_id    = sub["items"]["data"][0]["price"]["id"] if sub.get("items", {}).get("data") else ""
+        new_tier    = _STRIPE_PRICE_MAP.get(price_id, "free") if status == "active" else "free"
+        period_end  = sub.get("current_period_end")
+
+        email       = _find_email_by_stripe_customer(stripe_cust)
+        supabase_id = users_db.get(email, {}).get("supabase_id", "") if email else ""
+
+        if supabase_id:
+            await _update_supabase_subscription(supabase_id, new_tier, stripe_cust, status, period_end)
+        if email and email in users_db:
+            users_db[email]["tier"] = new_tier
+
+    return {"received": True}
+
+
+@app.get("/auth/me")
+async def get_me(user: str = Depends(get_current_user)) -> Dict[str, Any]:
+    """Return current user info and tier. Validates the Supabase JWT."""
+    from web.backend.tier_manager import get_user_tier  # type: ignore
+    tier = get_user_tier(user, users_db)
+    return {"email": user, "tier": tier}
 
 
 class ChatMessage(BaseModel):
@@ -1096,13 +1468,287 @@ class ChatMessage(BaseModel):
 
 @app.post("/chat")
 async def chat(body: ChatMessage, user: str = Depends(get_current_user)) -> Dict[str, Any]:
-    """Send a message to the AI trading assistant with signal context."""
+    """Send a message to PRISM — the multi-spectrum AI trading analyst."""
+    user_tier = get_user_tier(user, users_db)
+    check_chat_rate_limit(user, user_tier)
+    message = sanitize_message(body.message)
+    if not message:
+        raise HTTPException(status_code=400, detail="Message cannot be empty.")
     from web.backend import chat_engine
     reply = await chat_engine.chat(
-        body.session_id, 
-        body.message, 
+        body.session_id,
+        message,
         signal_context=body.signal_context
     )
+    return {"reply": reply, "session_id": body.session_id}
+
+
+# ── CIPHER Agent helpers ─────────────────────────────────────────────────────
+
+async def _fetch_agent_preferences(user_id: str) -> Optional[Dict[str, Any]]:
+    """Read user_preferences from Supabase. Returns None if not found."""
+    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
+        return None
+    try:
+        import httpx
+        url = f"{SUPABASE_URL}/rest/v1/user_preferences?user_id=eq.{user_id}&limit=1"
+        async with httpx.AsyncClient(timeout=8.0) as c:
+            resp = await c.get(url, headers={
+                "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
+                "apikey": SUPABASE_SERVICE_ROLE_KEY,
+            })
+        if resp.status_code == 200:
+            rows = resp.json()
+            return rows[0] if rows else None
+    except Exception as e:
+        logger.error("_fetch_agent_preferences error: %s", e)
+    return None
+
+
+async def _upsert_agent_preferences(user_id: str, payload: Dict[str, Any]) -> bool:
+    """Upsert user_preferences into Supabase. Returns True on success."""
+    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
+        return False
+    try:
+        import httpx
+        data = {**payload, "user_id": user_id}
+        url = f"{SUPABASE_URL}/rest/v1/user_preferences"
+        async with httpx.AsyncClient(timeout=8.0) as c:
+            resp = await c.post(url, json=data, headers={
+                "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
+                "apikey": SUPABASE_SERVICE_ROLE_KEY,
+                "Content-Type": "application/json",
+                "Prefer": "resolution=merge-duplicates,return=minimal",
+            })
+        return resp.status_code in (200, 201, 204)
+    except Exception as e:
+        logger.error("_upsert_agent_preferences error: %s", e)
+        return False
+
+
+async def _fetch_latest_brief(user_id: str) -> Optional[Dict[str, Any]]:
+    """Fetch the most recent CIPHER brief from Supabase."""
+    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
+        return None
+    try:
+        import httpx
+        # 001 schema uses created_at; sort by brief_date desc then created_at desc
+        url = f"{SUPABASE_URL}/rest/v1/agent_briefs?user_id=eq.{user_id}&order=created_at.desc&limit=1"
+        async with httpx.AsyncClient(timeout=8.0) as c:
+            resp = await c.get(url, headers={
+                "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
+                "apikey": SUPABASE_SERVICE_ROLE_KEY,
+            })
+        if resp.status_code == 200:
+            rows = resp.json()
+            return rows[0] if rows else None
+    except Exception as e:
+        logger.error("_fetch_latest_brief error: %s", e)
+    return None
+
+
+async def _store_brief(user_id: str, content: str, symbols: List[str]) -> None:
+    """Upsert a CIPHER brief into Supabase agent_briefs (one per user per day)."""
+    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
+        return
+    try:
+        import httpx
+        from datetime import date
+        payload = {
+            "user_id":    user_id,
+            "brief_date": date.today().isoformat(),  # required by 001 schema
+            "content":    content,
+            "symbols":    symbols,                    # added in 003 migration
+        }
+        url = f"{SUPABASE_URL}/rest/v1/agent_briefs"
+        async with httpx.AsyncClient(timeout=8.0) as c:
+            await c.post(url, json=payload, headers={
+                "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
+                "apikey": SUPABASE_SERVICE_ROLE_KEY,
+                "Content-Type": "application/json",
+                "Prefer": "resolution=merge-duplicates,return=minimal",
+            })
+    except Exception as e:
+        logger.error("_store_brief error: %s", e)
+
+
+# ── CIPHER Agent endpoints ───────────────────────────────────────────────────
+
+class AgentPreferences(BaseModel):
+    watchlist: List[str] = []
+    alert_types: List[str] = []
+    brief_time: str = "09:00"
+    voice_mode: bool = False
+    voice_name: str = "default"
+    onboarding_complete: bool = False
+
+
+class AgentQuestion(BaseModel):
+    question: str
+    session_id: str = "cipher-default"
+
+
+@app.get("/agent/preferences")
+async def get_agent_preferences(user: str = Depends(get_current_user)) -> Dict[str, Any]:
+    """Return CIPHER preferences for the authenticated user."""
+    user_data = users_db.get(user, {})
+    user_id   = user_data.get("supabase_id", "")
+    if not user_id:
+        return {"watchlist": [], "alert_types": [], "brief_time": "09:00",
+                "voice_mode": False, "voice_name": "default", "onboarding_complete": False}
+    prefs = await _fetch_agent_preferences(user_id)
+    if not prefs:
+        return {"watchlist": [], "alert_types": [], "brief_time": "09:00",
+                "voice_mode": False, "voice_name": "default", "onboarding_complete": False}
+    return {
+        "watchlist":            prefs.get("watchlist", []),
+        "alert_types":          prefs.get("alert_types", []),
+        "brief_time":           prefs.get("brief_time", "09:00"),
+        "voice_mode":           prefs.get("voice_mode", False),
+        "voice_name":           prefs.get("voice_name", "default"),
+        "onboarding_complete":  prefs.get("onboarding_complete", False),
+    }
+
+
+@app.post("/agent/preferences")
+async def save_agent_preferences(
+    body: AgentPreferences,
+    user: str = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """Upsert CIPHER preferences for the authenticated user."""
+    tier = get_user_tier(user, users_db)
+    if tier != "apex":
+        raise HTTPException(status_code=403, detail="CIPHER requires APEX tier")
+
+    user_data = users_db.get(user, {})
+    user_id   = user_data.get("supabase_id", "")
+    if not user_id:
+        raise HTTPException(status_code=400, detail="User ID not resolved — re-login")
+
+    watchlist = [s.strip().upper() for s in body.watchlist[:20] if s.strip()]
+    payload = {
+        "watchlist": watchlist,
+        "alert_types": body.alert_types[:10],
+        "brief_time": body.brief_time,
+        "voice_mode": body.voice_mode,
+        "voice_name": body.voice_name,
+        "onboarding_complete": body.onboarding_complete,
+    }
+    ok = await _upsert_agent_preferences(user_id, payload)
+    return {"status": "saved" if ok else "local_only", "preferences": payload}
+
+
+@app.get("/agent/brief")
+async def get_agent_brief(user: str = Depends(get_current_user)) -> Dict[str, Any]:
+    """Return the latest cached CIPHER brief for the user."""
+    tier = get_user_tier(user, users_db)
+    if tier != "apex":
+        raise HTTPException(status_code=403, detail="CIPHER requires APEX tier")
+
+    user_data = users_db.get(user, {})
+    user_id   = user_data.get("supabase_id", "")
+    if not user_id:
+        return {"brief": None, "generated_at": None}
+
+    brief = await _fetch_latest_brief(user_id)
+    if not brief:
+        return {"brief": None, "generated_at": None}
+    # 001 schema stores time in created_at; 003 migration adds symbols column
+    ts = brief.get("created_at") or brief.get("generated_at")
+    return {"brief": brief["content"], "generated_at": ts, "symbols": brief.get("symbols", [])}
+
+
+# Rate-limit: 1 brief per hour per user (in-memory — resets on restart)
+_brief_cooldowns: Dict[str, float] = {}
+BRIEF_COOLDOWN_SECONDS = 3600
+
+
+@app.post("/agent/brief/generate")
+async def generate_agent_brief(user: str = Depends(get_current_user)) -> Dict[str, Any]:
+    """Generate a new CIPHER brief on demand. Rate-limited to once per hour."""
+    tier = get_user_tier(user, users_db)
+    if tier != "apex":
+        raise HTTPException(status_code=403, detail="CIPHER requires APEX tier")
+
+    now = time.time()
+    last = _brief_cooldowns.get(user, 0)
+    wait = BRIEF_COOLDOWN_SECONDS - (now - last)
+    if wait > 0:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Brief rate limit: available again in {int(wait // 60)}m {int(wait % 60)}s"
+        )
+
+    user_data = users_db.get(user, {})
+    user_id   = user_data.get("supabase_id", user)
+
+    # Fetch user preferences
+    prefs = await _fetch_agent_preferences(user_id) or {}
+    watchlist = prefs.get("watchlist", []) or ["SPY", "QQQ", "NVDA", "AAPL", "TSLA"]
+
+    # Generate signals for the watchlist
+    import asyncio
+    tasks  = [_generate_claude_signal(sym, connector, user_email=user, tier="apex") for sym in watchlist[:8]]
+    sig_results = await asyncio.gather(*tasks, return_exceptions=True)
+    signals = [r for r in sig_results if not isinstance(r, Exception)]
+
+    regime = get_cached_regime(connector)
+
+    # Generate CIPHER brief
+    from web.backend import agent_engine
+    brief_text = await agent_engine.generate_brief(
+        user_email=user,
+        user_id=user_id,
+        preferences=prefs,
+        signals=signals,
+        regime=regime,
+    )
+
+    _brief_cooldowns[user] = now
+    await _store_brief(user_id, brief_text, watchlist)
+
+    return {"brief": brief_text, "generated_at": datetime.utcnow().isoformat() + "Z", "symbols": watchlist}
+
+
+@app.post("/agent/ask")
+async def agent_ask(
+    body: AgentQuestion,
+    user: str = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """Ask CIPHER a follow-up question. APEX only."""
+    tier = get_user_tier(user, users_db)
+    if tier != "apex":
+        raise HTTPException(status_code=403, detail="CIPHER requires APEX tier")
+    check_chat_rate_limit(user, tier)
+    body.question = sanitize_message(body.question)
+    if not body.question:
+        raise HTTPException(status_code=400, detail="Question cannot be empty.")
+
+    user_data = users_db.get(user, {})
+    user_id   = user_data.get("supabase_id", user)
+    prefs = await _fetch_agent_preferences(user_id) or {}
+    watchlist = prefs.get("watchlist", ["SPY", "QQQ", "NVDA"])
+
+    import asyncio
+    from web.backend import chat_engine, agent_engine
+    tasks = [_generate_claude_signal(sym, connector, user_email=user, tier="apex") for sym in watchlist[:5]]
+    sig_results = await asyncio.gather(*tasks, return_exceptions=True)
+    signals = [r for r in sig_results if not isinstance(r, Exception)]
+
+    history = chat_engine.get_history(body.session_id)
+    regime  = get_cached_regime(connector)
+
+    reply = await agent_engine.answer_question(
+        question=body.question,
+        preferences=prefs,
+        signals=signals,
+        regime=regime,
+        history=history,
+    )
+
+    chat_engine._add_to_history(body.session_id, "user", body.question)
+    chat_engine._add_to_history(body.session_id, "assistant", reply)
+
     return {"reply": reply, "session_id": body.session_id}
 
 
@@ -1383,22 +2029,65 @@ class EventCreate(BaseModel):
 
 @app.post("/events")
 async def log_event(body: EventCreate) -> Dict[str, Any]:
-    """Log a retention-tracking event."""
+    """Log a retention-tracking event (in-memory + Supabase if configured)."""
     from datetime import datetime
+    now = datetime.utcnow().isoformat() + "Z"
     entry = {
         "user_id": body.user_id,
         "symbol": body.symbol,
         "action": body.action,
-        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "timestamp": now,
     }
     event_log.append(entry)
+    # Fire-and-forget write to Supabase
+    sb_url = os.environ.get("SUPABASE_URL", "")
+    sb_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+    if sb_url and sb_key:
+        async def _persist():
+            try:
+                import httpx as _httpx
+                async with _httpx.AsyncClient() as client:
+                    await client.post(
+                        f"{sb_url}/rest/v1/event_log",
+                        headers={
+                            "apikey": sb_key,
+                            "Authorization": f"Bearer {sb_key}",
+                            "Content-Type": "application/json",
+                        },
+                        json={"user_id": body.user_id, "symbol": body.symbol, "action": body.action},
+                        timeout=5,
+                    )
+            except Exception as _e:
+                logger.debug("Event log Supabase write failed: %s", _e)
+        asyncio.create_task(_persist())
     return {"status": "logged", "event": entry}
 
 
 @app.get("/admin/events")
-async def get_events() -> Dict[str, Any]:
-    """Return the full event log as JSON. No auth required (MVP)."""
-    return {"events": event_log, "count": len(event_log)}
+async def get_events(admin_key: str = "") -> Dict[str, Any]:
+    """Return the full event log as JSON (admin only)."""
+    _admin_key = os.environ.get("ADMIN_SECRET_KEY", "")
+    if _admin_key and admin_key != _admin_key:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    # Prefer Supabase if configured
+    sb_url = os.environ.get("SUPABASE_URL", "")
+    sb_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+    if sb_url and sb_key:
+        try:
+            import httpx as _httpx
+            async with _httpx.AsyncClient() as client:
+                r = await client.get(
+                    f"{sb_url}/rest/v1/event_log",
+                    headers={"apikey": sb_key, "Authorization": f"Bearer {sb_key}"},
+                    params={"order": "created_at.desc", "limit": "1000"},
+                    timeout=8,
+                )
+                if r.status_code == 200:
+                    rows = r.json()
+                    return {"events": rows, "count": len(rows), "source": "supabase"}
+        except Exception as _e:
+            logger.warning("Supabase event_log read failed: %s", _e)
+    return {"events": event_log, "count": len(event_log), "source": "memory"}
 
 
 @app.get("/health")

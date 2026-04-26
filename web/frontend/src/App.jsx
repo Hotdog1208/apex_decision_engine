@@ -20,30 +20,38 @@ const ComingSoon     = lazy(() => import('./pages/ComingSoon'))
 const PerformancePage = lazy(() => import('./pages/PerformancePage'))
 const TrackRecord    = lazy(() => import('./pages/TrackRecord'))
 
-const LiveTrading  = lazy(() => import('./pages/LiveTrading'))
-const Analytics    = lazy(() => import('./pages/Analytics'))
-const Strategies   = lazy(() => import('./pages/Strategies'))
-const Settings     = lazy(() => import('./pages/Settings'))
-const Chat         = lazy(() => import('./pages/Chat'))
-const Alerts       = lazy(() => import('./pages/Alerts'))
-const News         = lazy(() => import('./pages/News'))
-const Calendar     = lazy(() => import('./pages/Calendar'))
-const Screener     = lazy(() => import('./pages/Screener'))
-const Heatmap      = lazy(() => import('./pages/Heatmap'))
-const Watchlists   = lazy(() => import('./pages/Watchlists'))
-const PriceAlerts  = lazy(() => import('./pages/PriceAlerts'))
-const RiskTools    = lazy(() => import('./pages/RiskTools'))
+const LiveTrading     = lazy(() => import('./pages/LiveTrading'))
+const Analytics       = lazy(() => import('./pages/Analytics'))
+const Strategies      = lazy(() => import('./pages/Strategies'))
+const Settings        = lazy(() => import('./pages/Settings'))
+const Chat            = lazy(() => import('./pages/Chat'))
+const Alerts          = lazy(() => import('./pages/Alerts'))
+const News            = lazy(() => import('./pages/News'))
+const Calendar        = lazy(() => import('./pages/Calendar'))
+const Screener        = lazy(() => import('./pages/Screener'))
+const Heatmap         = lazy(() => import('./pages/Heatmap'))
+const Watchlists      = lazy(() => import('./pages/Watchlists'))
+const PriceAlerts     = lazy(() => import('./pages/PriceAlerts'))
+const RiskTools       = lazy(() => import('./pages/RiskTools'))
+const ForgotPassword  = lazy(() => import('./pages/ForgotPassword'))
+const ResetPassword   = lazy(() => import('./pages/ResetPassword'))
+const AuthCallback    = lazy(() => import('./pages/AuthCallback'))
+const Account         = lazy(() => import('./pages/Account'))
+const Pricing         = lazy(() => import('./pages/Pricing'))
+const Agent           = lazy(() => import('./pages/Agent'))
+const NotFound        = lazy(() => import('./pages/NotFound'))
 
 import CommandPalette  from './components/CommandPalette'
 import BackendStatus   from './components/BackendStatus'
 import NoiseOverlay    from './components/NoiseOverlay'
 import GlitchText      from './components/GlitchText'
 import OnboardingModal from './components/OnboardingModal'
+import PrivateRoute    from './components/PrivateRoute'
 import { AuthProvider, useAuth } from './context/AuthContext'
 import { Toaster } from 'react-hot-toast'
 import {
   Command, LayoutDashboard, BarChart2, Activity, ChevronDown,
-  LogOut, HelpCircle, Award, Menu, X, Circle,
+  LogOut, HelpCircle, Award, Menu, X, Circle, Bot,
 } from 'lucide-react'
 
 const isMac = typeof navigator !== 'undefined' && /Mac|iPod|iPhone|iPad/.test(navigator.platform)
@@ -53,6 +61,7 @@ const NAV_ITEMS = [
   { to: '/dashboard',    label: 'Signals',      icon: LayoutDashboard },
   { to: '/charts',       label: 'Charts',        icon: BarChart2       },
   { to: '/track-record', label: 'Track Record',  icon: Award           },
+  { to: '/agent',        label: 'CIPHER',        icon: Bot, apexOnly: true },
 ]
 
 const TIER_STYLE = {
@@ -68,9 +77,11 @@ const REGIME_STYLE = {
   HIGH_VOLATILITY:{ color: 'var(--color-warning)',  dot: '#FFB800' },
 }
 
-function NavItem({ to, label, icon: Icon }) {
+function NavItem({ to, label, icon: Icon, apexOnly }) {
   const { pathname } = useLocation()
+  const { tier } = useAuth()
   const isActive = pathname === to || (to !== '/dashboard' && pathname.startsWith(to))
+  if (apexOnly && tier !== 'apex') return null
 
   return (
     <NavLink
@@ -82,7 +93,7 @@ function NavItem({ to, label, icon: Icon }) {
         letterSpacing: '0.14em',
         fontWeight:    700,
         textTransform: 'uppercase',
-        color: isActive ? 'var(--accent-primary)' : 'rgba(255,255,255,0.38)',
+        color: isActive ? (apexOnly ? '#CCFF00' : 'var(--accent-primary)') : (apexOnly ? 'rgba(204,255,0,0.50)' : 'rgba(255,255,255,0.38)'),
       }}
     >
       <Icon size={12} />
@@ -91,7 +102,7 @@ function NavItem({ to, label, icon: Icon }) {
         <motion.div
           layoutId="nav-underline"
           className="absolute inset-x-0 bottom-0"
-          style={{ height: '2px', background: 'var(--accent-primary)' }}
+          style={{ height: '2px', background: apexOnly ? '#CCFF00' : 'var(--accent-primary)' }}
           transition={{ type: 'spring', stiffness: 400, damping: 34 }}
         />
       )}
@@ -121,7 +132,7 @@ function LiveClock() {
 function AppNav() {
   const location = useLocation()
   const navigate = useNavigate()
-  const { user, logout } = useAuth()
+  const { user, tier, logout } = useAuth()
   const [commandOpen,    setCommandOpen]    = useState(false)
   const [userMenuOpen,   setUserMenuOpen]   = useState(false)
   const [mobileOpen,     setMobileOpen]     = useState(false)
@@ -151,7 +162,7 @@ function AppNav() {
 
   if (['/login', '/signup', '/'].includes(location.pathname)) return null
 
-  const tierKey  = user?.tier || 'free'
+  const tierKey  = tier || 'free'
   const ts       = TIER_STYLE[tierKey] || TIER_STYLE.free
   const rs       = regime ? (REGIME_STYLE[regime.regime] || REGIME_STYLE.BULL) : null
   const regimeLabel = regime?.regime === 'HIGH_VOLATILITY' ? 'HIGH VOL' : (regime?.regime || '')
@@ -193,6 +204,21 @@ function AppNav() {
 
             {/* Right controls */}
             <div className="flex items-center gap-1.5 shrink-0">
+              {/* Upgrade CTA — shown to free/edge users */}
+              {user && (tier === 'free' || tier === 'edge') && (
+                <NavLink
+                  to="/pricing"
+                  className="hidden sm:flex items-center gap-1.5 px-2.5 py-1.5 font-bold transition-all hover:opacity-90"
+                  style={{
+                    fontFamily: 'var(--font-data, monospace)', fontSize: '8px',
+                    letterSpacing: '0.12em', textTransform: 'uppercase',
+                    background: 'rgba(204,255,0,0.12)', color: '#CCFF00',
+                    border: '1px solid rgba(204,255,0,0.28)',
+                  }}
+                >
+                  ↑ Upgrade
+                </NavLink>
+              )}
 
               {/* Live clock */}
               <div className="hidden xl:flex items-center px-2">
@@ -272,7 +298,7 @@ function AppNav() {
                         {user.email[0].toUpperCase()}
                       </span>
                       <span className="hidden md:inline max-w-[80px] truncate">{user.email.split('@')[0]}</span>
-                      {user.tier && (
+                      {tier && tier !== 'free' && (
                         <span
                           className="hidden lg:inline px-1.5 py-0.5"
                           style={{
@@ -281,7 +307,7 @@ function AppNav() {
                             background: ts.bg, color: ts.color, border: `1px solid ${ts.border}`,
                           }}
                         >
-                          {user.tier}
+                          {tier}
                         </span>
                       )}
                       <ChevronDown size={9} className={`transition-transform ${userMenuOpen ? 'rotate-180' : ''}`} />
@@ -305,6 +331,25 @@ function AppNav() {
                               {user.email}
                             </p>
                           </div>
+                          {tier === 'apex' && (
+                            <NavLink
+                              to="/agent"
+                              onClick={() => setUserMenuOpen(false)}
+                              className="flex items-center gap-2 w-full px-4 py-2.5 transition-all text-left hover:bg-white/[0.03]"
+                              style={{ fontFamily: 'var(--font-data, monospace)', fontSize: '9px', letterSpacing: '0.12em', textTransform: 'uppercase', color: '#CCFF00' }}
+                            >
+                              <Bot size={11} />
+                              CIPHER Agent
+                            </NavLink>
+                          )}
+                          <NavLink
+                            to="/account"
+                            onClick={() => setUserMenuOpen(false)}
+                            className="flex items-center gap-2 w-full px-4 py-2.5 transition-all text-left hover:bg-white/[0.03]"
+                            style={{ fontFamily: 'var(--font-data, monospace)', fontSize: '9px', letterSpacing: '0.12em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.45)' }}
+                          >
+                            Account &amp; Security
+                          </NavLink>
                           <button
                             type="button"
                             onClick={() => { logout(); setUserMenuOpen(false); navigate('/') }}
@@ -430,33 +475,52 @@ function AppNav() {
   )
 }
 
+const PAGE_TITLES = {
+  '/':               'Apex Decision Engine',
+  '/dashboard':      'Signal Hub | ADE',
+  '/charts':         'Charts | ADE',
+  '/track-record':   'Track Record | ADE',
+  '/chat':           'PRISM Chat | ADE',
+  '/agent':          'CIPHER Agent | ADE',
+  '/account':        'Account | ADE',
+  '/pricing':        'Pricing | ADE',
+  '/login':          'Sign In | ADE',
+  '/signup':         'Join ADE',
+  '/forgot-password':'Reset Password | ADE',
+  '/privacy':        'Privacy Policy | ADE',
+  '/terms':          'Terms of Service | ADE',
+  '/risk-disclosure':'Risk Disclosure | ADE',
+  '/glossary':       'Glossary | ADE',
+  '/faq':            'FAQ | ADE',
+  '/disclaimer':     'Disclaimer | ADE',
+  '/admin/performance': 'Performance | ADE',
+}
+
+function TitleUpdater() {
+  const { pathname } = useLocation()
+  useEffect(() => {
+    document.title = PAGE_TITLES[pathname] || 'Apex Decision Engine'
+  }, [pathname])
+  return null
+}
+
 function AnimatedRoutes() {
   const location = useLocation()
   return (
-    <AnimatePresence mode="wait" initial={false}>
+    <>
+      <TitleUpdater />
+      <AnimatePresence mode="wait" initial={false}>
       <Routes location={location} key={location.pathname}>
-        <Route path="/"             element={<Landing />} />
-        <Route path="/login"        element={<Login />} />
-        <Route path="/signup"       element={<Signup />} />
-        <Route path="/dashboard"    element={<Dashboard />} />
-        <Route path="/charts"       element={<Charts />} />
-        <Route path="/track-record" element={<TrackRecord />} />
-        <Route path="/admin/performance" element={<PerformancePage />} />
+        {/* Public routes */}
+        <Route path="/"                element={<Landing />} />
+        <Route path="/login"           element={<Login />} />
+        <Route path="/signup"          element={<Signup />} />
+        <Route path="/forgot-password" element={<ForgotPassword />} />
+        <Route path="/reset-password"  element={<ResetPassword />} />
+        <Route path="/auth/callback"   element={<AuthCallback />} />
+        <Route path="/pricing"         element={<Pricing />} />
 
-        <Route path="/trading"      element={<ComingSoon />} />
-        <Route path="/chat"         element={<Chat />} />
-        <Route path="/alerts"       element={<ComingSoon />} />
-        <Route path="/news"         element={<ComingSoon />} />
-        <Route path="/calendar"     element={<ComingSoon />} />
-        <Route path="/screener"     element={<ComingSoon />} />
-        <Route path="/heatmap"      element={<ComingSoon />} />
-        <Route path="/watchlists"   element={<ComingSoon />} />
-        <Route path="/price-alerts" element={<ComingSoon />} />
-        <Route path="/risk-tools"   element={<ComingSoon />} />
-        <Route path="/strategies"   element={<ComingSoon />} />
-        <Route path="/analytics"    element={<ComingSoon />} />
-        <Route path="/settings"     element={<ComingSoon />} />
-
+        {/* Legal / info (public) */}
         <Route path="/privacy"         element={<Privacy />} />
         <Route path="/terms"           element={<Terms />} />
         <Route path="/risk-disclosure" element={<RiskDisclosure />} />
@@ -464,9 +528,32 @@ function AnimatedRoutes() {
         <Route path="/faq"             element={<FAQ />} />
         <Route path="/disclaimer"      element={<Disclaimer />} />
 
-        <Route path="*" element={<ComingSoon />} />
+        {/* Protected routes — require Supabase session */}
+        <Route path="/dashboard"    element={<PrivateRoute><Dashboard /></PrivateRoute>} />
+        <Route path="/charts"       element={<PrivateRoute><Charts /></PrivateRoute>} />
+        <Route path="/track-record" element={<PrivateRoute><TrackRecord /></PrivateRoute>} />
+        <Route path="/chat"         element={<PrivateRoute><Chat /></PrivateRoute>} />
+        <Route path="/agent"        element={<PrivateRoute><Agent /></PrivateRoute>} />
+        <Route path="/account"      element={<PrivateRoute><Account /></PrivateRoute>} />
+        <Route path="/admin/performance" element={<PrivateRoute><PerformancePage /></PrivateRoute>} />
+
+        <Route path="/trading"      element={<PrivateRoute><ComingSoon /></PrivateRoute>} />
+        <Route path="/alerts"       element={<PrivateRoute><ComingSoon /></PrivateRoute>} />
+        <Route path="/news"         element={<PrivateRoute><ComingSoon /></PrivateRoute>} />
+        <Route path="/calendar"     element={<PrivateRoute><ComingSoon /></PrivateRoute>} />
+        <Route path="/screener"     element={<PrivateRoute><ComingSoon /></PrivateRoute>} />
+        <Route path="/heatmap"      element={<PrivateRoute><ComingSoon /></PrivateRoute>} />
+        <Route path="/watchlists"   element={<PrivateRoute><ComingSoon /></PrivateRoute>} />
+        <Route path="/price-alerts" element={<PrivateRoute><ComingSoon /></PrivateRoute>} />
+        <Route path="/risk-tools"   element={<PrivateRoute><ComingSoon /></PrivateRoute>} />
+        <Route path="/strategies"   element={<PrivateRoute><ComingSoon /></PrivateRoute>} />
+        <Route path="/analytics"    element={<PrivateRoute><ComingSoon /></PrivateRoute>} />
+        <Route path="/settings"     element={<PrivateRoute><ComingSoon /></PrivateRoute>} />
+
+        <Route path="*" element={<NotFound />} />
       </Routes>
-    </AnimatePresence>
+      </AnimatePresence>
+    </>
   )
 }
 

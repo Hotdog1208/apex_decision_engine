@@ -4,10 +4,12 @@ import ReactMarkdown from 'react-markdown'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Send, MessageCircle, Cpu, Zap, Radio, Terminal } from 'lucide-react'
 import { api } from '../api'
+import { useAuth } from '../context/AuthContext'
 import PageWrapper from '../components/PageWrapper'
 import AITypingIndicator from '../components/AITypingIndicator'
 import GlitchText from '../components/GlitchText'
 import MagneticButton from '../components/MagneticButton'
+import UpgradePrompt from '../components/UpgradePrompt'
 
 const SUGGESTED_PROMPTS = [
   "What's moving the market today?",
@@ -18,6 +20,7 @@ const SUGGESTED_PROMPTS = [
 ]
 
 export default function Chat() {
+  const { tier } = useAuth()
   const [messages, setMessages] = useState([])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
@@ -25,6 +28,15 @@ export default function Chat() {
   const bottomRef = useRef(null)
   const location = useLocation()
   const initialData = location.state
+
+  // Gate: AI Chat requires alpha or apex
+  if (tier === 'free' || tier === 'edge') {
+    return (
+      <PageWrapper title="AI Chat">
+        <UpgradePrompt requiredTier="alpha" feature="AI Chat" />
+      </PageWrapper>
+    )
+  }
 
   useEffect(() => {
     api.getChatHistory(sessionId).then((r) => setMessages(r.messages || [])).catch(() => setMessages([]))

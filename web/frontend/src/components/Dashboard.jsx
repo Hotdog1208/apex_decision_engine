@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useNavigate, useLocation } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   Activity, Cpu, BarChart3, Zap, Plus, ExternalLink,
@@ -16,6 +16,7 @@ import SignalCard from './ui/SignalCard'
 import ConfidenceBar from './ui/ConfidenceBar'
 import VerdictBadge from './ui/VerdictBadge'
 import IndicatorPill from './ui/IndicatorPill'
+import UpgradePrompt from './UpgradePrompt'
 
 const easing = [0.16, 1, 0.3, 1]
 const MAX_WATCHLIST = 20
@@ -115,7 +116,7 @@ function PositionCalculator({ price, stopLoss }) {
 }
 
 export default function Dashboard() {
-  const { user } = useAuth()
+  const { user, tier } = useAuth()
   const navigate = useNavigate()
 
   const [signals,          setSignals]          = useState([])
@@ -132,6 +133,8 @@ export default function Dashboard() {
 
   const loadSignalsForSymbols = useCallback(async (symbols) => {
     if (!symbols?.length) return
+    // Free tier: don't make any Claude API calls — signals are locked
+    if (tier === 'free') { setLoading(false); return }
     setLoading(true)
     try {
       const res = await api.getBatchSignals(symbols)
@@ -142,9 +145,10 @@ export default function Dashboard() {
     } finally {
       setLoading(false)
     }
-  }, [user])
+  }, [user, tier])
 
   useEffect(() => {
+    if (tier === 'free') { setLoading(false); return }
     if (user) {
       api.getWatchlists()
         .then((res) => {
@@ -169,7 +173,7 @@ export default function Dashboard() {
         .catch((e) => setError(e.message))
         .finally(() => setLoading(false))
     }
-  }, [user]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [user, tier]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleSelect = useCallback((symbol) => {
     setSelectedSymbol(symbol)
@@ -249,6 +253,56 @@ export default function Dashboard() {
     return acc
   }, {})
 
+  if (tier === 'free') {
+    return (
+      <PageWrapper className="relative min-h-screen">
+        {/* Research disclaimer */}
+        <div
+          className="flex items-center gap-2 px-4 py-2 mb-4 text-xs"
+          style={{
+            fontFamily: 'var(--font-data, monospace)',
+            letterSpacing: '0.08em',
+            background: 'rgba(255,184,0,0.05)',
+            borderLeft: '3px solid rgba(255,184,0,0.50)',
+            color: 'rgba(255,184,0,0.70)',
+          }}
+        >
+          <span>⚠</span>
+          <span>ADE signals are for research purposes only and do not constitute financial advice.{' '}
+            <a href="/risk-disclosure" className="underline hover:text-amber-300 transition-colors">Risk Disclosure</a>.
+          </span>
+        </div>
+        <div className="relative">
+          {/* Blurred ghost preview */}
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-6 select-none pointer-events-none"
+            style={{ filter: 'blur(4px)', opacity: 0.35 }}
+          >
+            {['AAPL','MSFT','NVDA','TSLA','META','AMZN'].map(sym => (
+              <div key={sym} className="p-4 space-y-3"
+                style={{ border: '1px solid rgba(255,255,255,0.06)', background: 'rgba(255,255,255,0.02)' }}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="font-mono font-bold text-white/80">{sym}</span>
+                  <span className="text-xs px-2 py-0.5 rounded" style={{ background: 'rgba(204,255,0,0.15)', color: '#CCFF00' }}>BUY</span>
+                </div>
+                <div className="h-1 rounded" style={{ background: 'rgba(204,255,0,0.3)', width: '70%' }} />
+                <div className="space-y-1">
+                  {[80, 55, 40].map(w => (
+                    <div key={w} className="h-2 rounded" style={{ background: 'rgba(255,255,255,0.06)', width: `${w}%` }} />
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+          {/* Upgrade overlay */}
+          <div className="absolute inset-0 flex items-center justify-center" style={{ background: 'rgba(3,5,8,0.70)', backdropFilter: 'blur(2px)' }}>
+            <UpgradePrompt requiredTier="edge" feature="Signal Hub" />
+          </div>
+        </div>
+      </PageWrapper>
+    )
+  }
+
   if (loading && signals.length === 0) {
     return (
       <PageWrapper>
@@ -264,6 +318,22 @@ export default function Dashboard() {
 
   return (
     <PageWrapper className="relative min-h-screen">
+      {/* Persistent research disclaimer — required on Signal Hub */}
+      <div
+        className="flex items-center gap-2 px-4 py-2 mb-4 text-xs"
+        style={{
+          fontFamily: 'var(--font-data, monospace)',
+          letterSpacing: '0.08em',
+          background: 'rgba(255,184,0,0.05)',
+          borderLeft: '3px solid rgba(255,184,0,0.50)',
+          color: 'rgba(255,184,0,0.70)',
+        }}
+      >
+        <span>⚠</span>
+        <span>ADE signals are for research purposes only and do not constitute financial advice. See{' '}
+          <a href="/risk-disclosure" className="underline hover:text-amber-300 transition-colors">Risk Disclosure</a>.
+        </span>
+      </div>
       <div className="space-y-6 relative z-10 mt-5 mb-24">
 
         {/* ── Command bar header ── */}
@@ -541,6 +611,19 @@ export default function Dashboard() {
                       <p style={{ fontFamily: 'var(--font-data, monospace)', fontSize: '8px', color: '#FF0055', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.14em', marginBottom: '6px' }}>Primary Risk</p>
                       <p style={{ fontFamily: 'var(--font-body)', fontSize: '12px', color: 'rgba(255,255,255,0.75)', lineHeight: 1.5 }}>{selectedSignal.bear_case}</p>
                     </div>
+                    {/* Cross-timeframe notes from PRISM */}
+                    {(selectedSignal.scalp_note && selectedSignal.scalp_note !== 'No intraday edge.') && (
+                      <div className="px-3 py-2.5" style={{ background: 'rgba(0,212,255,0.04)', border: '1px solid rgba(0,212,255,0.10)' }}>
+                        <span style={{ fontFamily: 'var(--font-data, monospace)', fontSize: '8px', color: 'rgba(0,212,255,0.60)', textTransform: 'uppercase', letterSpacing: '0.12em', fontWeight: 700 }}>Scalp › </span>
+                        <span style={{ fontFamily: 'var(--font-data, monospace)', fontSize: '10px', color: 'rgba(255,255,255,0.55)' }}>{selectedSignal.scalp_note.replace(/^Intraday:\s*/i, '')}</span>
+                      </div>
+                    )}
+                    {(selectedSignal.long_note && selectedSignal.long_note !== 'Insufficient fundamental data.') && (
+                      <div className="px-3 py-2.5" style={{ background: 'rgba(204,255,0,0.03)', border: '1px solid rgba(204,255,0,0.10)' }}>
+                        <span style={{ fontFamily: 'var(--font-data, monospace)', fontSize: '8px', color: 'rgba(204,255,0,0.55)', textTransform: 'uppercase', letterSpacing: '0.12em', fontWeight: 700 }}>Long-term › </span>
+                        <span style={{ fontFamily: 'var(--font-data, monospace)', fontSize: '10px', color: 'rgba(255,255,255,0.55)' }}>{selectedSignal.long_note.replace(/^Long-term:\s*/i, '')}</span>
+                      </div>
+                    )}
                   </div>
                 </div>
 

@@ -1,53 +1,89 @@
 import { createContext, useContext, useState, useEffect, useCallback } from 'react'
-
-const TOKEN_KEY = 'ade_token'
-const USER_KEY = 'ade_user'
+import { supabase } from '../lib/supabase'
 
 const AuthContext = createContext({
   user: null,
+  session: null,
   token: null,
+  tier: 'free',
   login: async () => {},
-  logout: () => {},
+  logout: async () => {},
+  refreshTier: async () => {},
   isReady: false,
 })
 
+async function fetchUserTier(userId) {
+  try {
+    const { data } = await supabase
+      .from('users')
+      .select('tier')
+      .eq('user_id', userId)
+      .single()
+    return data?.tier || 'free'
+  } catch {
+    return 'free'
+  }
+}
+
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null)
-  const [token, setToken] = useState(null)
+  const [session, setSession] = useState(null)
+  const [tier, setTier] = useState('free')
   const [isReady, setIsReady] = useState(false)
 
+  const refreshTier = useCallback(async (userId) => {
+    if (!userId) return
+    const t = await fetchUserTier(userId)
+    setTier(t)
+    return t
+  }, [])
+
   useEffect(() => {
-    try {
-      const t = localStorage.getItem(TOKEN_KEY)
-      const u = localStorage.getItem(USER_KEY)
-      if (t && u) {
-        setToken(t)
-        setUser(JSON.parse(u))
+    // Load existing session on mount
+    supabase.auth.getSession().then(async ({ data: { session } }) => {
+      setSession(session)
+      if (session?.user) {
+        setUser(session.user)
+        await refreshTier(session.user.id)
       }
-    } catch (_) {}
-    setIsReady(true)
-  }, [])
+      setIsReady(true)
+    })
 
-  const login = useCallback((userData, accessToken) => {
-    setUser(userData)
-    setToken(accessToken)
-    try {
-      localStorage.setItem(TOKEN_KEY, accessToken)
-      localStorage.setItem(USER_KEY, JSON.stringify(userData))
-    } catch (_) {}
-  }, [])
+    // Subscribe to auth state changes (login, logout, token refresh)
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(
+      async (event, session) => {
+        setSession(session)
+        if (session?.user) {
+          setUser(session.user)
+          if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
+            await refreshTier(session.user.id)
+          }
+        } else {
+          setUser(null)
+          setTier('free')
+        }
+        // Mark ready after first resolution (handles redirect flows)
+        setIsReady(true)
+      }
+    )
 
-  const logout = useCallback(() => {
+    return () => subscription.unsubscribe()
+  }, [refreshTier])
+
+  const logout = useCallback(async () => {
+    await supabase.auth.signOut()
     setUser(null)
-    setToken(null)
-    try {
-      localStorage.removeItem(TOKEN_KEY)
-      localStorage.removeItem(USER_KEY)
-    } catch (_) {}
+    setSession(null)
+    setTier('free')
   }, [])
+
+  // Backward-compat shim: login() is a no-op; Supabase manages sessions via onAuthStateChange.
+  const login = useCallback(() => {}, [])
+
+  const token = session?.access_token ?? null
 
   return (
-    <AuthContext.Provider value={{ user, token, login, logout, isReady }}>
+    <AuthContext.Provider value={{ user, session, token, tier, login, logout, refreshTier, isReady }}>
       {children}
     </AuthContext.Provider>
   )
@@ -57,10 +93,21 @@ export function useAuth() {
   return useContext(AuthContext)
 }
 
+/** Synchronously read the Supabase access token from localStorage (for WebSocket setup). */
 export function getStoredToken() {
   try {
-    return localStorage.getItem(TOKEN_KEY)
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i)
+      if (key && key.startsWith('sb-') && key.endsWith('-auth-token')) {
+        const raw = localStorage.getItem(key)
+        if (raw) {
+          const parsed = JSON.parse(raw)
+          return parsed?.access_token ?? null
+        }
+      }
+    }
   } catch {
     return null
   }
+  return null
 }
