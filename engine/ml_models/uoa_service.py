@@ -21,7 +21,7 @@ def get_uoa_score(symbol: str, history: list) -> Optional[Dict[str, Any]]:
         return None
     
     try:
-        with open(UOA_DATA_FILE, "r") as f:
+        with open(UOA_DATA_FILE, "r", encoding="utf-8-sig") as f:
             content = f.read().strip()
             if not content:
                 return None

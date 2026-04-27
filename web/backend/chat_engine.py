@@ -78,7 +78,7 @@ def build_rag_context(user_message: str, connector: Any) -> str:
     anomalies = []
     try:
         if uoa_file.exists() and uoa_file.stat().st_size > 0:
-            with open(uoa_file, "r") as f:
+            with open(uoa_file, "r", encoding="utf-8-sig") as f:
                 data: List[Dict[str, Any]] = json.load(f)
                 anomalies = [a for a in data if a.get("ticker") == ticker] if ticker else []
                 if not anomalies and data:

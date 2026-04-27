@@ -134,7 +134,7 @@ class UOAModelPipeline:
             return pd.DataFrame()
             
         try:
-            with open(DATA_FILE, "r") as f:
+            with open(DATA_FILE, "r", encoding="utf-8-sig") as f:
                 anomalies = json.load(f)
         except Exception as e:
             logger.error(f"Failed to load UOA data: {e}")
