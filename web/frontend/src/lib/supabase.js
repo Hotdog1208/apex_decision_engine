@@ -26,6 +26,10 @@ export const supabase = createClient(
       persistSession:    !_supabaseMisconfigured,
       detectSessionInUrl: !_supabaseMisconfigured,
       flowType: 'pkce',
+      // Bypass navigator.locks to prevent the "lock stolen by another request"
+      // unhandled rejection that fires when multiple tabs or concurrent requests
+      // race on token refresh. Refreshes run independently — harmless in practice.
+      lock: (_name, _acquireTimeout, fn) => fn(),
     },
   }
 )
