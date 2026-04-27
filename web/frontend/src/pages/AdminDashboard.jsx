@@ -45,13 +45,29 @@ const VERDICT_COLOR = {
 // ── API ───────────────────────────────────────────────────────────────────────
 async function adminJson(path, method = 'GET', body = null, key = '') {
   let url = `${API_BASE}${path}`
-  const init = { method, headers: { 'Content-Type': 'application/json' } }
+  const init = { method, headers: {} }
+
   if (method === 'GET') {
+    // No custom headers on GET — avoids CORS preflight entirely.
+    // Admin key travels as a query param.
     url += (url.includes('?') ? '&' : '?') + `admin_key=${encodeURIComponent(key)}`
   } else {
+    init.headers['Content-Type'] = 'application/json'
     init.body = JSON.stringify({ ...(body || {}), admin_key: key })
   }
-  const res = await fetch(url, init)
+
+  let res
+  try {
+    res = await fetch(url, init)
+  } catch {
+    throw new Error(
+      'Network error — cannot reach the backend.\n' +
+      '1. Check VITE_API_URL is set in Vercel → Settings → Environment Variables.\n' +
+      '2. Check CORS_ORIGINS on Render includes your Vercel domain.\n' +
+      '3. Render free tier sleeps after inactivity — wait 30 s then retry.'
+    )
+  }
+
   if (!res.ok) {
     const txt = await res.text().catch(() => res.statusText)
     let msg = txt
@@ -785,8 +801,17 @@ export default function AdminDashboard() {
           from { transform: rotate(0deg); }
           to   { transform: rotate(360deg); }
         }
-        .ade-admin-root *, .ade-admin-root *::before, .ade-admin-root *::after { box-sizing: border-box; margin: 0; padding: 0; }
-        .ade-admin-root textarea::placeholder, .ade-admin-root input::placeholder { color: rgba(255,255,255,0.22); }
+        /* Reset the global cursor:none that index.css applies to body/buttons/inputs */
+        .ade-admin-root,
+        .ade-admin-root * { box-sizing: border-box; margin: 0; padding: 0; cursor: auto !important; }
+        .ade-admin-root button,
+        .ade-admin-root [role="button"],
+        .ade-admin-root a { cursor: pointer !important; }
+        .ade-admin-root input,
+        .ade-admin-root textarea,
+        .ade-admin-root select { cursor: text !important; }
+        .ade-admin-root textarea::placeholder,
+        .ade-admin-root input::placeholder { color: rgba(255,255,255,0.22); }
         .ade-admin-root textarea { font-family: ${C.sans}; }
       `}</style>
       <div className="ade-admin-root" style={{ position: 'fixed', inset: 0, zIndex: 9999, display: 'flex', background: C.bg, color: C.text, overflow: 'hidden' }}>
