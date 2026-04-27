@@ -6,6 +6,20 @@ import { _supabaseMisconfigured } from './lib/supabase'
 import './styles/tokens.css'
 import './index.css'
 
+// Suppress Supabase navigator.locks race errors. These fire when multiple tabs or
+// concurrent requests compete for the auth token refresh lock. The session remains
+// valid — the winning request already refreshed it. Not a real error; silence Sentry.
+window.addEventListener('unhandledrejection', (event) => {
+  const msg = event.reason?.message || ''
+  const name = event.reason?.name || ''
+  if (
+    msg.includes('Lock') && (msg.includes('stole') || msg.includes('steal')) ||
+    (name === 'AbortError' && msg.toLowerCase().includes('lock'))
+  ) {
+    event.preventDefault()
+  }
+})
+
 // Show a hard-stop banner if Supabase env vars are missing — prevents blank screen
 if (_supabaseMisconfigured) {
   const banner = document.createElement('div')

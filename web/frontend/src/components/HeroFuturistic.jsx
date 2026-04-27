@@ -135,13 +135,13 @@ function PostProcessing({ strength = 1, threshold = 1 }) {
 
   useFrame(({ clock }) => {
     if (deadRef.current || !render) return
-    try {
-      progressRef.current.value = Math.sin(clock.getElapsedTime() * 0.5) * 0.5 + 0.5
-      render.renderAsync()
-    } catch (e) {
-      console.warn('HeroFuturistic: renderAsync failed —', e.message)
+    progressRef.current.value = Math.sin(clock.getElapsedTime() * 0.5) * 0.5 + 0.5
+    // renderAsync() returns a Promise — sync try/catch doesn't catch async throws.
+    // Chain .catch() so rejected frames set deadRef and silence future calls.
+    render.renderAsync().catch(e => {
+      console.warn('HeroFuturistic: renderAsync failed —', e?.message)
       deadRef.current = true
-    }
+    })
   }, 1)
 
   return null

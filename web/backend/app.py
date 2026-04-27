@@ -790,9 +790,19 @@ async def admin_panel_ask(body: AdminAskRequest) -> Dict[str, Any]:
     if not question:
         raise HTTPException(status_code=400, detail="Question cannot be empty")
     watchlist = [s.strip().upper() for s in body.watchlist[:5] if s.strip()] or ["SPY", "QQQ"]
-    tasks = [_generate_claude_signal(sym, connector, user_email="admin", tier="apex") for sym in watchlist]
-    sig_results = await asyncio.gather(*tasks, return_exceptions=True)
-    signals = [r for r in sig_results if not isinstance(r, Exception)]
+
+    # Use only cached signals — do NOT generate new Claude signal calls here.
+    # Generating signals burns ~2,000 tokens per symbol before CIPHER even starts,
+    # pushing the request over the 30k token/min rate limit. CIPHER has web_search
+    # to find its own current data; cached signals are bonus context only.
+    signals = []
+    for sym in watchlist:
+        for tier_key in (f"{sym}:apex", f"{sym}:edge", f"{sym}:free"):
+            cached = signal_cache.get(tier_key)
+            if cached and time.time() - cached["timestamp"] < 3600:
+                signals.append(cached["data"])
+                break
+
     regime = get_cached_regime(connector)
     from web.backend import chat_engine, agent_engine  # type: ignore
     history = chat_engine.get_history(body.session_id)

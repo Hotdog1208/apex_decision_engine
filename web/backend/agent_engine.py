@@ -211,7 +211,7 @@ async def answer_question(
     ]
 
     tools = [
-        {"type": "web_search_20250305", "name": "web_search", "max_uses": 5},
+        {"type": "web_search_20250305", "name": "web_search", "max_uses": 3},
         {
             "name": "get_stock_quote",
             "description": (
@@ -309,6 +309,17 @@ async def answer_question(
         ]
         return "\n".join(text_parts) if text_parts else "_CIPHER: no analysis generated._"
 
+    except anthropic.RateLimitError:
+        logger.warning("Anthropic rate limit hit on /admin/panel/ask")
+        return (
+            "**Rate limit reached** — too many tokens were sent in the last minute "
+            "(Anthropic free tier: 30k input tokens/min on Sonnet).\n\n"
+            "Wait 60 seconds and try again. To raise the limit, either:\n"
+            "- Switch to `ANTHROPIC_MODEL=claude-haiku-4-5-20251001` on Render "
+            "(4× cheaper, higher rate limit), or\n"
+            "- Upgrade your Anthropic usage tier at console.anthropic.com.\n\n"
+            "*This is intelligence, not advice. Trade responsibly.*"
+        )
     except anthropic.BadRequestError as e:
         logger.warning("Tool unavailable (%s), falling back to no-search mode", e)
         return await _answer_no_search(question, compact_signals, regime, history, client, model)
