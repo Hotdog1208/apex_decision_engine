@@ -1,648 +1,800 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
+import {
+  Activity, TrendingUp, FileText, MessageSquare,
+  Lock, Send, RefreshCw, Settings, ChevronDown, ChevronUp,
+  Bot, Zap, X,
+} from 'lucide-react'
 
 const API_BASE = import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE || '/api'
 const SK = 'ade_admin_key'
 
-// ── helpers ──────────────────────────────────────────────────────────────────
-
-async function adminFetch(path, method = 'GET', body = null, adminKey = '') {
-  const url = `${API_BASE}${path}`
-  const init = {
-    method,
-    headers: { 'Content-Type': 'application/json' },
-  }
-  if (method === 'GET') {
-    const sep = path.includes('?') ? '&' : '?'
-    return fetch(`${url}${sep}admin_key=${encodeURIComponent(adminKey)}`, init)
-  }
-  init.body = JSON.stringify({ ...(body || {}), admin_key: adminKey })
-  return fetch(url, init)
+// ── Design tokens ─────────────────────────────────────────────────────────────
+const C = {
+  bg:          '#09090B',
+  sidebar:     '#0C0D10',
+  panel:       '#111318',
+  input:       '#0D0F13',
+  border:      'rgba(255,255,255,0.07)',
+  borderFocus: 'rgba(255,255,255,0.20)',
+  dim:         'rgba(255,255,255,0.25)',
+  mid:         'rgba(255,255,255,0.50)',
+  text:        'rgba(255,255,255,0.82)',
+  bright:      '#FFFFFF',
+  lime:        '#CCFF00',
+  cyan:        '#00D4FF',
+  green:       '#22C55E',
+  red:         '#EF4444',
+  orange:      '#F59E0B',
+  mono:        '"JetBrains Mono","Fira Code",ui-monospace,monospace',
+  sans:        '-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif',
 }
 
-async function adminJson(path, method = 'GET', body = null, adminKey = '') {
-  const res = await adminFetch(path, method, body, adminKey)
+const TABS = [
+  { id: 'chat',   label: 'CIPHER Chat',  Icon: MessageSquare, desc: 'Live Q&A with CIPHER' },
+  { id: 'prism',  label: 'PRISM Signal', Icon: TrendingUp,    desc: 'Test signal generation' },
+  { id: 'brief',  label: 'Daily Brief',  Icon: FileText,      desc: 'Generate full briefing' },
+  { id: 'status', label: 'System',       Icon: Activity,      desc: 'Health & analytics' },
+]
+
+const VERDICT_COLOR = {
+  STRONG_BUY: C.green, BUY: C.green,
+  WATCH: C.orange,
+  AVOID: C.red, STRONG_AVOID: C.red,
+}
+
+// ── API ───────────────────────────────────────────────────────────────────────
+async function adminJson(path, method = 'GET', body = null, key = '') {
+  let url = `${API_BASE}${path}`
+  const init = { method, headers: { 'Content-Type': 'application/json' } }
+  if (method === 'GET') {
+    url += (url.includes('?') ? '&' : '?') + `admin_key=${encodeURIComponent(key)}`
+  } else {
+    init.body = JSON.stringify({ ...(body || {}), admin_key: key })
+  }
+  const res = await fetch(url, init)
   if (!res.ok) {
     const txt = await res.text().catch(() => res.statusText)
     let msg = txt
-    try { msg = JSON.parse(txt)?.detail || JSON.parse(txt)?.message || txt } catch (_) {}
-    throw new Error(msg || `HTTP ${res.status}`)
+    try { const j = JSON.parse(txt); msg = j.detail || j.message || j.error || txt } catch (_) {}
+    throw new Error(String(msg || `HTTP ${res.status}`))
   }
   return res.json()
 }
 
-// ── atoms ────────────────────────────────────────────────────────────────────
-
-const C = {
-  bg:      '#08090B',
-  panel:   '#0E1014',
-  border:  'rgba(255,255,255,0.07)',
-  dim:     'rgba(255,255,255,0.22)',
-  mid:     'rgba(255,255,255,0.50)',
-  bright:  'rgba(255,255,255,0.85)',
-  lime:    '#CCFF00',
-  cyan:    '#00D4FF',
-  red:     '#FF2052',
-  orange:  '#FF7A00',
-  green:   '#00E879',
-  mono:    '"JetBrains Mono", "Fira Code", monospace',
+// ── Markdown renderer ─────────────────────────────────────────────────────────
+function renderInline(text) {
+  return text.split(/(\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`)/g).map((p, i) => {
+    if (p.startsWith('**') && p.endsWith('**'))
+      return <strong key={i} style={{ color: C.bright, fontWeight: 700 }}>{p.slice(2, -2)}</strong>
+    if (p.startsWith('*') && p.endsWith('*') && p.length > 2)
+      return <em key={i} style={{ color: C.mid }}>{p.slice(1, -1)}</em>
+    if (p.startsWith('`') && p.endsWith('`') && p.length > 2)
+      return <code key={i} style={{ color: C.lime, fontFamily: C.mono, fontSize: '0.88em', background: 'rgba(204,255,0,0.08)', padding: '1px 5px' }}>{p.slice(1, -1)}</code>
+    return p
+  })
 }
 
-const pill = (color) => ({
-  display: 'inline-flex', alignItems: 'center', gap: '5px',
-  padding: '2px 8px', fontSize: '9px', fontWeight: 700,
-  letterSpacing: '0.14em', textTransform: 'uppercase',
-  background: `${color}18`, color, border: `1px solid ${color}40`,
-  fontFamily: C.mono,
-})
-
-function Dot({ on }) {
-  return (
-    <span style={{
-      width: 6, height: 6, borderRadius: '50%',
-      background: on ? C.green : 'rgba(255,255,255,0.15)',
-      display: 'inline-block', flexShrink: 0,
-      boxShadow: on ? `0 0 6px ${C.green}` : 'none',
-    }} />
-  )
-}
-
-function Label({ children }) {
-  return (
-    <span style={{
-      fontSize: '9px', fontWeight: 700, letterSpacing: '0.18em',
-      textTransform: 'uppercase', color: C.lime, fontFamily: C.mono,
-    }}>
-      {children}
-    </span>
-  )
-}
-
-function SectionTitle({ children }) {
-  return (
-    <div style={{
-      display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16,
-    }}>
-      <Label>{children}</Label>
-      <div style={{ flex: 1, height: 1, background: C.border }} />
-    </div>
-  )
-}
-
-function Panel({ children, style }) {
-  return (
-    <div style={{
-      background: C.panel,
-      border: `1px solid ${C.border}`,
-      padding: '20px',
-      ...style,
-    }}>
-      {children}
-    </div>
-  )
-}
-
-function Btn({ children, onClick, disabled, loading, variant = 'primary', style }) {
-  const base = {
-    fontFamily: C.mono, fontSize: '9px', fontWeight: 700,
-    letterSpacing: '0.14em', textTransform: 'uppercase',
-    padding: '8px 16px', cursor: disabled || loading ? 'not-allowed' : 'pointer',
-    border: 'none', transition: 'opacity 0.15s',
-    opacity: disabled || loading ? 0.4 : 1,
-    ...style,
-  }
-  const themes = {
-    primary: { background: C.lime, color: '#000' },
-    ghost:   { background: 'rgba(255,255,255,0.04)', color: C.mid, border: `1px solid ${C.border}` },
-    danger:  { background: `${C.red}22`, color: C.red, border: `1px solid ${C.red}40` },
-    cyan:    { background: `${C.cyan}18`, color: C.cyan, border: `1px solid ${C.cyan}40` },
-  }
-  return (
-    <button onClick={onClick} disabled={disabled || loading} style={{ ...base, ...themes[variant] }}>
-      {loading ? '...' : children}
-    </button>
-  )
-}
-
-function Input({ value, onChange, placeholder, style, type = 'text', onKeyDown }) {
-  return (
-    <input
-      type={type}
-      value={value}
-      onChange={e => onChange(e.target.value)}
-      onKeyDown={onKeyDown}
-      placeholder={placeholder}
-      style={{
-        background: '#05070A',
-        border: `1px solid ${C.border}`,
-        color: C.bright,
-        fontFamily: C.mono,
-        fontSize: '11px',
-        padding: '8px 12px',
-        outline: 'none',
-        width: '100%',
-        letterSpacing: '0.04em',
-        ...style,
-      }}
-    />
-  )
-}
-
-// ── brief renderer ────────────────────────────────────────────────────────────
-
-function BriefRenderer({ text }) {
+function Markdown({ text }) {
   if (!text) return null
   return (
-    <div style={{ fontFamily: C.mono }}>
+    <div style={{ fontFamily: C.sans }}>
       {text.split('\n').map((line, i) => {
         if (line.startsWith('## '))
-          return <p key={i} style={{ fontSize: '9px', fontWeight: 700, letterSpacing: '0.18em', textTransform: 'uppercase', color: C.lime, marginTop: 18, marginBottom: 6 }}>{line.slice(3)}</p>
+          return <p key={i} style={{ fontFamily: C.mono, fontSize: '9px', fontWeight: 700, letterSpacing: '0.18em', textTransform: 'uppercase', color: C.lime, marginTop: 20, marginBottom: 8 }}>{line.slice(3)}</p>
         if (line.startsWith('### '))
-          return <p key={i} style={{ fontSize: '9px', fontWeight: 700, letterSpacing: '0.14em', textTransform: 'uppercase', color: C.mid, marginTop: 12, marginBottom: 4 }}>{line.slice(4)}</p>
+          return <p key={i} style={{ fontFamily: C.mono, fontSize: '8px', fontWeight: 700, letterSpacing: '0.14em', textTransform: 'uppercase', color: C.mid, marginTop: 14, marginBottom: 5 }}>{line.slice(4)}</p>
         if (line.startsWith('- ') || line.startsWith('* '))
-          return <p key={i} style={{ fontSize: '11px', color: 'rgba(255,255,255,0.70)', lineHeight: 1.65, marginBottom: 2, paddingLeft: 12 }}><span style={{ color: C.lime, marginRight: 6 }}>›</span>{line.slice(2)}</p>
+          return (
+            <div key={i} style={{ display: 'flex', gap: 8, marginBottom: 5 }}>
+              <span style={{ color: C.lime, flexShrink: 0, fontSize: '11px', marginTop: 1 }}>›</span>
+              <p style={{ fontSize: '13px', color: C.text, lineHeight: 1.72, margin: 0 }}>{renderInline(line.slice(2))}</p>
+            </div>
+          )
         if (line === '---' || line === '—')
           return <div key={i} style={{ height: 1, background: C.border, margin: '14px 0' }} />
         if (!line.trim())
-          return <div key={i} style={{ height: 6 }} />
-        return <p key={i} style={{ fontSize: '11px', color: 'rgba(255,255,255,0.70)', lineHeight: 1.70, marginBottom: 3 }}>{line}</p>
+          return <div key={i} style={{ height: 8 }} />
+        return <p key={i} style={{ fontSize: '13px', color: C.text, lineHeight: 1.72, marginBottom: 4 }}>{renderInline(line)}</p>
       })}
     </div>
   )
 }
 
-// ── signal renderer ──────────────────────────────────────────────────────────
-
-const VERDICT_COLOR = {
-  STRONG_BUY: C.green, BUY: C.green, WATCH: C.orange,
-  AVOID: C.red, STRONG_AVOID: C.red,
+// ── Signal components ─────────────────────────────────────────────────────────
+function ScoreBar({ label, value }) {
+  const color = value >= 65 ? C.green : value >= 40 ? C.orange : C.red
+  return (
+    <div style={{ marginBottom: 10 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+        <span style={{ fontFamily: C.mono, fontSize: '9px', color: C.dim, letterSpacing: '0.10em', textTransform: 'uppercase' }}>{label.replace(/_/g, ' ')}</span>
+        <span style={{ fontFamily: C.mono, fontSize: '10px', color, fontWeight: 700 }}>{value}</span>
+      </div>
+      <div style={{ height: 3, background: 'rgba(255,255,255,0.06)', borderRadius: 2, overflow: 'hidden' }}>
+        <div style={{ height: '100%', width: `${Math.min(value, 100)}%`, background: `linear-gradient(90deg, ${color}80, ${color})`, borderRadius: 2, transition: 'width 0.7s cubic-bezier(0.16,1,0.3,1)' }} />
+      </div>
+    </div>
+  )
 }
 
-function SignalRenderer({ signal }) {
+function SignalResult({ signal }) {
   if (!signal) return null
   const vc = VERDICT_COLOR[signal.verdict] || C.mid
   return (
-    <div style={{ fontFamily: C.mono }}>
-      {/* Header row */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
-        <span style={{ fontSize: '22px', fontWeight: 900, color: C.bright, letterSpacing: '-0.02em' }}>{signal.symbol}</span>
-        <span style={pill(vc)}>{signal.verdict}</span>
-        <span style={pill(C.cyan)}>{signal.confidence ?? signal.raw_confidence ?? '—'}%</span>
-        {signal.primary_timeframe && <span style={pill(C.dim)}>{signal.primary_timeframe}</span>}
-        {signal.market_regime && <span style={pill(C.orange)}>{signal.market_regime}</span>}
-      </div>
-
-      {/* Price */}
-      {signal.price > 0 && (
-        <p style={{ fontSize: '11px', color: C.dim, marginBottom: 10 }}>
-          Price: <span style={{ color: C.bright }}>${signal.price?.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-          {signal.composite_score != null && (
-            <span style={{ marginLeft: 14 }}>Composite Score: <span style={{ color: C.lime }}>{signal.composite_score}/100</span></span>
-          )}
-        </p>
-      )}
-
-      {/* Reasoning */}
-      {signal.reasoning && (
-        <div style={{ marginBottom: 14 }}>
-          <Label>Reasoning</Label>
-          <p style={{ marginTop: 6, fontSize: '11px', color: 'rgba(255,255,255,0.72)', lineHeight: 1.70 }}>{signal.reasoning}</p>
-        </div>
-      )}
-
-      {/* Bull / Bear */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 14 }}>
-        {signal.bull_case && (
-          <div style={{ background: `${C.green}0A`, border: `1px solid ${C.green}25`, padding: '10px 12px' }}>
-            <Label>Bull Case</Label>
-            <p style={{ marginTop: 5, fontSize: '10px', color: 'rgba(255,255,255,0.65)', lineHeight: 1.6 }}>{signal.bull_case}</p>
-          </div>
-        )}
-        {signal.bear_case && (
-          <div style={{ background: `${C.red}0A`, border: `1px solid ${C.red}25`, padding: '10px 12px' }}>
-            <Label>Bear Case</Label>
-            <p style={{ marginTop: 5, fontSize: '10px', color: 'rgba(255,255,255,0.65)', lineHeight: 1.6 }}>{signal.bear_case}</p>
-          </div>
-        )}
-      </div>
-
-      {/* Key indicators */}
-      {signal.key_indicators?.length > 0 && (
-        <div style={{ marginBottom: 14 }}>
-          <Label>Key Indicators</Label>
-          <div style={{ marginTop: 8, display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-            {signal.key_indicators.map((ind, i) => (
-              <span key={i} style={{ fontSize: '9px', fontFamily: C.mono, color: C.mid, background: 'rgba(255,255,255,0.04)', border: `1px solid ${C.border}`, padding: '3px 8px' }}>
-                {ind}
+    <div>
+      {/* Header */}
+      <div style={{ padding: '24px 28px', borderBottom: `1px solid ${C.border}`, background: `linear-gradient(135deg, ${vc}08 0%, transparent 55%)` }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 12 }}>
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 10 }}>
+              <span style={{ fontFamily: C.mono, fontSize: '30px', fontWeight: 900, color: C.bright, letterSpacing: '-0.02em' }}>{signal.symbol}</span>
+              <span style={{ fontFamily: C.mono, fontSize: '9px', fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', padding: '4px 10px', background: `${vc}18`, color: vc, border: `1px solid ${vc}40` }}>
+                {signal.verdict}
               </span>
-            ))}
+            </div>
+            {signal.price > 0 && (
+              <div style={{ fontFamily: C.mono, fontSize: '12px', color: C.mid }}>
+                ${signal.price?.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                <span style={{ marginLeft: 20, color: C.dim }}>Score: <span style={{ color: C.lime, fontWeight: 700 }}>{signal.composite_score}/100</span></span>
+                {signal.market_regime && <span style={{ marginLeft: 20, color: C.dim }}>Regime: <span style={{ color: C.orange }}>{signal.market_regime}</span></span>}
+              </div>
+            )}
+          </div>
+          <div style={{ textAlign: 'right' }}>
+            <div style={{ fontFamily: C.mono, fontSize: '36px', fontWeight: 900, color: vc, lineHeight: 1 }}>{signal.confidence}%</div>
+            <div style={{ fontFamily: C.mono, fontSize: '8px', color: C.dim, textTransform: 'uppercase', letterSpacing: '0.12em', marginTop: 2 }}>Confidence</div>
+            {signal.primary_timeframe && (
+              <span style={{ display: 'inline-block', marginTop: 6, fontFamily: C.mono, fontSize: '8px', color: C.mid, background: 'rgba(255,255,255,0.05)', border: `1px solid ${C.border}`, padding: '2px 8px', textTransform: 'uppercase', letterSpacing: '0.10em' }}>
+                {signal.timeframe_label || signal.primary_timeframe}
+              </span>
+            )}
           </div>
         </div>
-      )}
+      </div>
 
-      {/* Factor scores */}
-      {signal.factor_scores && (
-        <div style={{ marginBottom: 14 }}>
-          <Label>Factor Scores</Label>
-          <div style={{ marginTop: 8, display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: 6 }}>
-            {Object.entries(signal.factor_scores).map(([k, v]) => (
-              <div key={k} style={{ background: 'rgba(255,255,255,0.02)', border: `1px solid ${C.border}`, padding: '6px 10px' }}>
-                <div style={{ fontSize: '8px', color: C.dim, letterSpacing: '0.12em', textTransform: 'uppercase', marginBottom: 3 }}>{k.replace(/_/g, ' ')}</div>
-                <div style={{ fontSize: '13px', fontWeight: 700, color: v > 60 ? C.green : v < 40 ? C.red : C.orange }}>{v}</div>
+      <div style={{ padding: '24px 28px' }}>
+        {signal.reasoning && (
+          <div style={{ marginBottom: 22 }}>
+            <div style={{ fontFamily: C.mono, fontSize: '8px', color: C.dim, letterSpacing: '0.16em', textTransform: 'uppercase', marginBottom: 8 }}>Reasoning</div>
+            <p style={{ fontFamily: C.sans, fontSize: '13px', color: C.text, lineHeight: 1.75 }}>{signal.reasoning}</p>
+          </div>
+        )}
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 22 }}>
+          {signal.bull_case && (
+            <div style={{ padding: '14px 16px', background: `${C.green}07`, border: `1px solid ${C.green}22` }}>
+              <div style={{ fontFamily: C.mono, fontSize: '8px', color: C.green, letterSpacing: '0.16em', textTransform: 'uppercase', marginBottom: 6 }}>Bull Case</div>
+              <p style={{ fontFamily: C.sans, fontSize: '12px', color: C.text, lineHeight: 1.65 }}>{signal.bull_case}</p>
+            </div>
+          )}
+          {signal.bear_case && (
+            <div style={{ padding: '14px 16px', background: `${C.red}07`, border: `1px solid ${C.red}22` }}>
+              <div style={{ fontFamily: C.mono, fontSize: '8px', color: C.red, letterSpacing: '0.16em', textTransform: 'uppercase', marginBottom: 6 }}>Bear Case</div>
+              <p style={{ fontFamily: C.sans, fontSize: '12px', color: C.text, lineHeight: 1.65 }}>{signal.bear_case}</p>
+            </div>
+          )}
+        </div>
+
+        {signal.key_indicators?.length > 0 && (
+          <div style={{ marginBottom: 22 }}>
+            <div style={{ fontFamily: C.mono, fontSize: '8px', color: C.dim, letterSpacing: '0.16em', textTransform: 'uppercase', marginBottom: 10 }}>Key Indicators</div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+              {signal.key_indicators.map((ind, i) => (
+                <span key={i} style={{ fontFamily: C.mono, fontSize: '10px', color: C.mid, background: 'rgba(255,255,255,0.04)', border: `1px solid ${C.border}`, padding: '4px 10px' }}>{ind}</span>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {signal.factor_scores && Object.keys(signal.factor_scores).length > 0 && (
+          <div style={{ marginBottom: 22 }}>
+            <div style={{ fontFamily: C.mono, fontSize: '8px', color: C.dim, letterSpacing: '0.16em', textTransform: 'uppercase', marginBottom: 12 }}>Factor Scores</div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2px 28px' }}>
+              {Object.entries(signal.factor_scores).map(([k, v]) => <ScoreBar key={k} label={k} value={v} />)}
+            </div>
+          </div>
+        )}
+
+        {(signal.scalp_note || signal.long_note) && (
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+            {[['Scalp Note', signal.scalp_note], ['Long Note', signal.long_note]].map(([lbl, txt]) => txt && (
+              <div key={lbl} style={{ padding: '12px 14px', background: 'rgba(255,255,255,0.02)', border: `1px solid ${C.border}` }}>
+                <div style={{ fontFamily: C.mono, fontSize: '8px', color: C.dim, letterSpacing: '0.14em', textTransform: 'uppercase', marginBottom: 5 }}>{lbl}</div>
+                <p style={{ fontFamily: C.sans, fontSize: '12px', color: C.mid, lineHeight: 1.6 }}>{txt}</p>
               </div>
             ))}
           </div>
-        </div>
-      )}
-
-      {/* Scalp / Long notes */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-        {signal.scalp_note && (
-          <div style={{ padding: '8px 12px', background: 'rgba(255,255,255,0.02)', border: `1px solid ${C.border}` }}>
-            <Label>Scalp Note</Label>
-            <p style={{ marginTop: 4, fontSize: '10px', color: C.mid, lineHeight: 1.6 }}>{signal.scalp_note}</p>
-          </div>
         )}
-        {signal.long_note && (
-          <div style={{ padding: '8px 12px', background: 'rgba(255,255,255,0.02)', border: `1px solid ${C.border}` }}>
-            <Label>Long Note</Label>
-            <p style={{ marginTop: 4, fontSize: '10px', color: C.mid, lineHeight: 1.6 }}>{signal.long_note}</p>
-          </div>
+
+        {signal.calibrated_label && (
+          <p style={{ marginTop: 14, fontFamily: C.mono, fontSize: '9px', color: C.dim, fontStyle: 'italic' }}>{signal.calibrated_label}</p>
         )}
       </div>
+    </div>
+  )
+}
 
-      {signal.calibrated_label && (
-        <p style={{ marginTop: 10, fontSize: '9px', color: C.dim, fontStyle: 'italic' }}>{signal.calibrated_label}</p>
+// ── Status tab ────────────────────────────────────────────────────────────────
+function StatusCard({ label, value, on }) {
+  return (
+    <div style={{ padding: '14px 18px', background: C.panel, border: `1px solid ${on ? C.green + '28' : C.border}` }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 6 }}>
+        <span style={{ width: 6, height: 6, borderRadius: '50%', background: on ? C.green : 'rgba(255,255,255,0.14)', flexShrink: 0, boxShadow: on ? `0 0 7px ${C.green}` : 'none' }} />
+        <span style={{ fontFamily: C.mono, fontSize: '8px', color: C.dim, letterSpacing: '0.14em', textTransform: 'uppercase' }}>{label}</span>
+      </div>
+      <span style={{ fontFamily: C.mono, fontSize: '12px', color: on ? C.bright : C.dim, fontWeight: on ? 500 : 400 }}>{String(value)}</span>
+    </div>
+  )
+}
+
+function SectionLabel({ children }) {
+  return <div style={{ fontFamily: C.mono, fontSize: '8px', color: C.dim, letterSpacing: '0.18em', textTransform: 'uppercase', marginBottom: 10 }}>{children}</div>
+}
+
+function StatusTab({ adminKey }) {
+  const [status, setStatus] = useState(null)
+  const [loading, setLoading] = useState(false)
+  const [err, setErr] = useState('')
+
+  const load = useCallback(async () => {
+    setLoading(true); setErr('')
+    try { setStatus(await adminJson('/admin/panel/status', 'GET', null, adminKey)) }
+    catch (e) { setErr(e.message) }
+    finally { setLoading(false) }
+  }, [adminKey])
+
+  useEffect(() => { load() }, [load])
+
+  const svc = status?.services || {}
+
+  return (
+    <div style={{ flex: 1, overflowY: 'auto', padding: '28px 32px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 28 }}>
+        <div>
+          <h2 style={{ fontFamily: C.mono, fontSize: '14px', fontWeight: 700, color: C.bright, marginBottom: 4, letterSpacing: '-0.01em' }}>System Status</h2>
+          <p style={{ fontFamily: C.mono, fontSize: '10px', color: C.dim }}>Live health check across all services</p>
+        </div>
+        <button onClick={load} disabled={loading} style={{ fontFamily: C.mono, fontSize: '9px', color: C.dim, background: 'transparent', border: `1px solid ${C.border}`, padding: '7px 14px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, letterSpacing: '0.10em', textTransform: 'uppercase', transition: 'border-color 0.15s' }}
+          onMouseEnter={e => e.currentTarget.style.borderColor = C.borderFocus}
+          onMouseLeave={e => e.currentTarget.style.borderColor = C.border}
+        >
+          <RefreshCw size={10} style={{ animation: loading ? 'adeAdminSpin 1s linear infinite' : 'none' }} />
+          Refresh
+        </button>
+      </div>
+
+      {err && <div style={{ padding: '12px 16px', background: `${C.red}10`, border: `1px solid ${C.red}30`, color: C.red, fontFamily: C.mono, fontSize: '11px', marginBottom: 24, borderRadius: 0 }}>{err}</div>}
+
+      {status && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 28 }}>
+          <div>
+            <SectionLabel>Integrations</SectionLabel>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(190px, 1fr))', gap: 8 }}>
+              <StatusCard label="Anthropic API" on={svc.anthropic_api} value={svc.anthropic_api ? 'Connected' : 'Not configured'} />
+              <StatusCard label="Supabase"      on={svc.supabase}      value={svc.supabase ? 'Connected' : 'Not configured'} />
+              <StatusCard label="Stripe"        on={svc.stripe}        value={svc.stripe ? 'Connected' : 'Not configured'} />
+              <StatusCard label="Finnhub"       on={svc.finnhub}       value={svc.finnhub ? 'Connected' : 'Not configured'} />
+              <StatusCard label="Sentry"        on={svc.sentry}        value={svc.sentry ? 'Active' : 'Disabled'} />
+            </div>
+          </div>
+
+          <div>
+            <SectionLabel>Runtime</SectionLabel>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(190px, 1fr))', gap: 8 }}>
+              <StatusCard label="Backend"       on={true}                      value="OK" />
+              <StatusCard label="Data Source"   on={true}                      value={status.data_source} />
+              <StatusCard label="AI Model"      on={true}                      value={status.model?.replace('claude-', '')} />
+              <StatusCard label="Cached Signals" on={status.cached_signals > 0} value={`${status.cached_signals} cached`} />
+              <StatusCard label="Active Users"   on={status.active_users > 0}   value={`${status.active_users} sessions`} />
+              <StatusCard label="Chats Today"   on={true}                      value={`${status.total_chat_messages_today} messages`} />
+              <StatusCard label="Market Regime" on={true}                      value={status.regime?.regime || '—'} />
+            </div>
+          </div>
+
+          {status.accuracy?.evaluated > 0 && (
+            <div>
+              <SectionLabel>Signal Accuracy</SectionLabel>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(190px, 1fr))', gap: 8 }}>
+                <StatusCard label="Total Evaluated" on={true} value={status.accuracy.evaluated} />
+                <StatusCard label="Overall Accuracy" on={status.accuracy.accuracy_pct >= 50} value={`${status.accuracy.accuracy_pct?.toFixed(1)}%`} />
+                {status.accuracy.by_verdict && Object.entries(status.accuracy.by_verdict).map(([v, d]) => (
+                  <StatusCard key={v} label={v} on={(d.accuracy || 0) >= 50} value={`${(d.accuracy || 0).toFixed(0)}% (n=${d.evaluated || 0})`} />
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
       )}
     </div>
   )
 }
 
-// ── sections ─────────────────────────────────────────────────────────────────
-
-function StatusSection({ adminKey }) {
-  const [status, setStatus] = useState(null)
-  const [loading, setLoading] = useState(false)
-  const [err, setErr] = useState('')
-
-  const fetch = useCallback(async () => {
-    setLoading(true); setErr('')
-    try {
-      const data = await adminJson('/admin/panel/status', 'GET', null, adminKey)
-      setStatus(data)
-    } catch (e) { setErr(e.message) }
-    finally { setLoading(false) }
-  }, [adminKey])
-
-  useEffect(() => { fetch() }, [fetch])
-
-  const svc = status?.services || {}
-
-  return (
-    <Panel>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-        <SectionTitle>System Status</SectionTitle>
-        <Btn variant="ghost" onClick={fetch} loading={loading} style={{ marginBottom: 16 }}>Refresh</Btn>
-      </div>
-      {err && <p style={{ color: C.red, fontSize: '10px', marginBottom: 10 }}>{err}</p>}
-      {status && (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 10 }}>
-          {[
-            { label: 'Backend',        on: true,              value: status.backend },
-            { label: 'Data Source',    on: true,              value: status.data_source },
-            { label: 'Anthropic API',  on: svc.anthropic_api, value: svc.anthropic_api ? 'Connected' : 'NOT SET' },
-            { label: 'Finnhub',        on: svc.finnhub,       value: svc.finnhub ? 'Connected' : 'NOT SET' },
-            { label: 'Supabase',       on: svc.supabase,      value: svc.supabase ? 'Connected' : 'NOT SET' },
-            { label: 'Stripe',         on: svc.stripe,        value: svc.stripe ? 'Connected' : 'NOT SET' },
-            { label: 'Sentry',         on: svc.sentry,        value: svc.sentry ? 'Active' : 'Disabled' },
-            { label: 'AI Model',       on: true,              value: status.model },
-            { label: 'Cached Signals', on: true,              value: status.cached_signals },
-            { label: 'Active Users',   on: true,              value: status.active_users },
-            { label: 'Chats Today',    on: true,              value: status.total_chat_messages_today },
-            { label: 'Market Regime',  on: true,              value: status.regime?.regime || '—' },
-          ].map(({ label, on, value }) => (
-            <div key={label} style={{ background: 'rgba(255,255,255,0.02)', border: `1px solid ${C.border}`, padding: '10px 12px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
-                <Dot on={on} />
-                <span style={{ fontSize: '8px', color: C.dim, letterSpacing: '0.14em', textTransform: 'uppercase', fontFamily: C.mono }}>{label}</span>
-              </div>
-              <span style={{ fontSize: '11px', color: C.bright, fontFamily: C.mono }}>{String(value)}</span>
-            </div>
-          ))}
-        </div>
-      )}
-      {status?.accuracy?.evaluated > 0 && (
-        <div style={{ marginTop: 16, padding: '12px', background: 'rgba(255,255,255,0.02)', border: `1px solid ${C.border}` }}>
-          <Label>Signal Accuracy</Label>
-          <div style={{ marginTop: 8, display: 'flex', gap: 24, flexWrap: 'wrap' }}>
-            <span style={{ fontSize: '11px', color: C.mid, fontFamily: C.mono }}>
-              Evaluated: <span style={{ color: C.bright }}>{status.accuracy.evaluated}</span>
-            </span>
-            <span style={{ fontSize: '11px', color: C.mid, fontFamily: C.mono }}>
-              Accuracy: <span style={{ color: C.lime }}>{status.accuracy.accuracy_pct?.toFixed(1)}%</span>
-            </span>
-          </div>
-        </div>
-      )}
-    </Panel>
-  )
-}
-
-function PrismSection({ adminKey }) {
+// ── PRISM tab ─────────────────────────────────────────────────────────────────
+function PrismTab({ adminKey }) {
   const [symbol, setSymbol] = useState('AAPL')
   const [signal, setSignal] = useState(null)
   const [loading, setLoading] = useState(false)
   const [err, setErr] = useState('')
 
-  const run = async () => {
-    if (!symbol.trim()) return
+  const generate = async () => {
+    const sym = symbol.trim().toUpperCase()
+    if (!sym || loading) return
     setLoading(true); setErr(''); setSignal(null)
-    try {
-      const data = await adminJson('/admin/panel/signal', 'POST', { symbol: symbol.trim().toUpperCase() }, adminKey)
-      setSignal(data)
-    } catch (e) { setErr(e.message) }
+    try { setSignal(await adminJson('/admin/panel/signal', 'POST', { symbol: sym }, adminKey)) }
+    catch (e) { setErr(e.message) }
     finally { setLoading(false) }
   }
 
   return (
-    <Panel>
-      <SectionTitle>PRISM Signal Tester</SectionTitle>
-      <div style={{ display: 'flex', gap: 10, marginBottom: 16 }}>
-        <Input
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+      <div style={{ padding: '18px 28px', borderBottom: `1px solid ${C.border}`, display: 'flex', gap: 10, alignItems: 'center', flexShrink: 0 }}>
+        <input
           value={symbol}
-          onChange={setSymbol}
-          placeholder="Symbol (e.g. AAPL)"
-          style={{ maxWidth: 180 }}
-          onKeyDown={e => e.key === 'Enter' && run()}
+          onChange={e => setSymbol(e.target.value.toUpperCase().replace(/[^A-Z0-9.-]/g, '').slice(0, 10))}
+          onKeyDown={e => e.key === 'Enter' && generate()}
+          placeholder="Ticker symbol"
+          style={{ width: 160, background: C.input, border: `1px solid ${C.border}`, color: C.bright, fontFamily: C.mono, fontSize: '14px', padding: '10px 14px', outline: 'none', letterSpacing: '0.08em', transition: 'border-color 0.15s' }}
+          onFocus={e => e.target.style.borderColor = C.borderFocus}
+          onBlur={e => e.target.style.borderColor = C.border}
         />
-        <Btn onClick={run} loading={loading}>Generate Signal</Btn>
+        <button onClick={generate} disabled={loading || !symbol.trim()} style={{ fontFamily: C.mono, fontSize: '10px', fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', padding: '10px 20px', background: C.lime, color: '#000', border: 'none', cursor: loading ? 'wait' : 'pointer', display: 'flex', alignItems: 'center', gap: 8, opacity: !symbol.trim() ? 0.5 : 1, flexShrink: 0 }}>
+          <Zap size={12} />{loading ? 'Generating...' : 'Generate Signal'}
+        </button>
+        {loading && <span style={{ fontFamily: C.mono, fontSize: '10px', color: C.dim }}>Calling Claude · 5–15s</span>}
       </div>
-      {err && <p style={{ color: C.red, fontSize: '10px', marginBottom: 10 }}>{err}</p>}
-      {loading && (
-        <p style={{ fontSize: '10px', color: C.dim, fontFamily: C.mono, letterSpacing: '0.10em' }}>
-          Generating signal — calling Anthropic Claude...
-        </p>
-      )}
-      {signal && <SignalRenderer signal={signal} />}
-    </Panel>
+
+      <div style={{ flex: 1, overflowY: 'auto' }}>
+        {err && <div style={{ margin: '20px 28px', padding: '12px 16px', background: `${C.red}10`, border: `1px solid ${C.red}30`, color: C.red, fontFamily: C.mono, fontSize: '11px' }}>{err}</div>}
+
+        {!signal && !loading && !err && (
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 12, opacity: 0.3 }}>
+            <TrendingUp size={40} color={C.lime} />
+            <p style={{ fontFamily: C.mono, fontSize: '10px', color: C.dim, letterSpacing: '0.14em', textTransform: 'uppercase' }}>Enter a symbol above to run PRISM</p>
+          </div>
+        )}
+
+        {signal && (
+          <div style={{ margin: '24px 28px', background: C.panel, border: `1px solid ${C.border}` }}>
+            <SignalResult signal={signal} />
+          </div>
+        )}
+      </div>
+    </div>
   )
 }
 
-function CipherBriefSection({ adminKey }) {
-  const [watchlistInput, setWatchlistInput] = useState('SPY, QQQ, NVDA, AAPL, TSLA')
+// ── Brief tab ─────────────────────────────────────────────────────────────────
+function BriefTab({ adminKey }) {
+  const [wlInput, setWlInput] = useState('SPY, QQQ, NVDA, AAPL, TSLA')
   const [brief, setBrief] = useState(null)
   const [meta, setMeta] = useState(null)
   const [loading, setLoading] = useState(false)
   const [err, setErr] = useState('')
 
   const generate = async () => {
+    if (loading) return
     setLoading(true); setErr(''); setBrief(null); setMeta(null)
-    const watchlist = watchlistInput.split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
+    const watchlist = wlInput.split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
     try {
-      const data = await adminJson('/admin/panel/brief', 'POST', { watchlist }, adminKey)
-      setBrief(data.brief)
-      setMeta({ symbols: data.symbols, signal_count: data.signal_count, generated_at: data.generated_at })
+      const d = await adminJson('/admin/panel/brief', 'POST', { watchlist }, adminKey)
+      setBrief(d.brief)
+      setMeta({ symbols: d.symbols, signal_count: d.signal_count, generated_at: d.generated_at })
     } catch (e) { setErr(e.message) }
     finally { setLoading(false) }
   }
 
   return (
-    <Panel>
-      <SectionTitle>CIPHER Brief Generator</SectionTitle>
-      <div style={{ display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap' }}>
-        <Input
-          value={watchlistInput}
-          onChange={setWatchlistInput}
-          placeholder="Watchlist (comma-separated)"
-          style={{ maxWidth: 360 }}
-          onKeyDown={e => e.key === 'Enter' && generate()}
-        />
-        <Btn onClick={generate} loading={loading} variant="cyan">Generate Brief</Btn>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+      <div style={{ padding: '18px 28px', borderBottom: `1px solid ${C.border}`, flexShrink: 0 }}>
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+          <input
+            value={wlInput}
+            onChange={e => setWlInput(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && generate()}
+            placeholder="Watchlist: SPY, QQQ, NVDA..."
+            style={{ flex: '1 1 280px', minWidth: 0, background: C.input, border: `1px solid ${C.border}`, color: C.bright, fontFamily: C.mono, fontSize: '12px', padding: '10px 14px', outline: 'none', transition: 'border-color 0.15s' }}
+            onFocus={e => e.target.style.borderColor = C.borderFocus}
+            onBlur={e => e.target.style.borderColor = C.border}
+          />
+          <button onClick={generate} disabled={loading} style={{ fontFamily: C.mono, fontSize: '10px', fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', padding: '10px 20px', background: `${C.cyan}18`, color: C.cyan, border: `1px solid ${C.cyan}40`, cursor: loading ? 'wait' : 'pointer', display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0, opacity: loading ? 0.6 : 1 }}>
+            <FileText size={12} />{loading ? 'Generating...' : 'Generate Brief'}
+          </button>
+        </div>
+        {loading && <p style={{ fontFamily: C.mono, fontSize: '9px', color: C.dim, marginTop: 8 }}>Fetching signals → composing with Claude · 15–30 seconds</p>}
       </div>
-      {err && <p style={{ color: C.red, fontSize: '10px', marginBottom: 10 }}>{err}</p>}
-      {loading && (
-        <div>
-          <p style={{ fontSize: '10px', color: C.dim, fontFamily: C.mono, letterSpacing: '0.10em' }}>
-            Generating signals for watchlist, then composing CIPHER brief via Claude...
-          </p>
-          <p style={{ fontSize: '9px', color: 'rgba(255,255,255,0.20)', fontFamily: C.mono, marginTop: 4 }}>
-            This may take 10–20 seconds on first run (cold data fetch + Claude call).
-          </p>
-        </div>
-      )}
-      {meta && (
-        <div style={{ display: 'flex', gap: 16, marginBottom: 14, flexWrap: 'wrap' }}>
-          <span style={{ fontSize: '9px', color: C.dim, fontFamily: C.mono }}>
-            Symbols: <span style={{ color: C.bright }}>{meta.symbols?.join(', ')}</span>
-          </span>
-          <span style={{ fontSize: '9px', color: C.dim, fontFamily: C.mono }}>
-            Signals: <span style={{ color: C.lime }}>{meta.signal_count}</span>
-          </span>
-          <span style={{ fontSize: '9px', color: C.dim, fontFamily: C.mono }}>
-            At: <span style={{ color: C.mid }}>{meta.generated_at?.slice(0, 19).replace('T', ' ')} UTC</span>
-          </span>
-        </div>
-      )}
-      {brief && (
-        <div style={{ background: 'rgba(255,255,255,0.02)', border: `1px solid ${C.border}`, padding: '16px' }}>
-          <BriefRenderer text={brief} />
-        </div>
-      )}
-    </Panel>
+
+      <div style={{ flex: 1, overflowY: 'auto', padding: '24px 28px' }}>
+        {err && <div style={{ padding: '12px 16px', background: `${C.red}10`, border: `1px solid ${C.red}30`, color: C.red, fontFamily: C.mono, fontSize: '11px', marginBottom: 20 }}>{err}</div>}
+
+        {!brief && !loading && !err && (
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 12, opacity: 0.3 }}>
+            <FileText size={40} color={C.cyan} />
+            <p style={{ fontFamily: C.mono, fontSize: '10px', color: C.dim, letterSpacing: '0.14em', textTransform: 'uppercase' }}>Configure watchlist above and generate</p>
+          </div>
+        )}
+
+        {meta && (
+          <div style={{ display: 'flex', gap: 20, marginBottom: 20, padding: '10px 14px', background: C.panel, border: `1px solid ${C.border}`, flexWrap: 'wrap' }}>
+            <span style={{ fontFamily: C.mono, fontSize: '9px', color: C.dim }}>Symbols: <span style={{ color: C.bright }}>{meta.symbols?.join(' · ')}</span></span>
+            <span style={{ fontFamily: C.mono, fontSize: '9px', color: C.dim }}>Signals used: <span style={{ color: C.lime }}>{meta.signal_count}</span></span>
+            <span style={{ fontFamily: C.mono, fontSize: '9px', color: C.dim }}>{meta.generated_at?.slice(0, 19).replace('T', ' ')} UTC</span>
+          </div>
+        )}
+
+        {brief && <div style={{ maxWidth: 720 }}><Markdown text={brief} /></div>}
+      </div>
+    </div>
   )
 }
 
-function CipherAskSection({ adminKey }) {
-  const [watchlistInput, setWatchlistInput] = useState('SPY, QQQ, NVDA')
-  const [question, setQuestion] = useState('')
-  const [history, setHistory] = useState([])
-  const [loading, setLoading] = useState(false)
-  const [err, setErr] = useState('')
-  const bottomRef = useRef(null)
+// ── Chat tab ──────────────────────────────────────────────────────────────────
+function ChatMessage({ msg }) {
+  const isUser = msg.role === 'user'
+  const time = msg.ts ? new Date(msg.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''
 
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [history])
-
-  const ask = async () => {
-    const q = question.trim()
-    if (!q || loading) return
-    setQuestion(''); setErr('')
-    const prev = [...history, { role: 'user', content: q }]
-    setHistory(prev)
-    setLoading(true)
-    const watchlist = watchlistInput.split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
-    try {
-      const data = await adminJson('/admin/panel/ask', 'POST', { question: q, watchlist, session_id: 'admin-session' }, adminKey)
-      setHistory([...prev, { role: 'assistant', content: data.reply }])
-    } catch (e) {
-      setErr(e.message)
-      setHistory(prev)
-    }
-    setLoading(false)
+  if (isUser) {
+    return (
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 24, padding: '0 28px' }}>
+        <div style={{ maxWidth: '72%' }}>
+          <div style={{ textAlign: 'right', marginBottom: 6 }}>
+            <span style={{ fontFamily: C.mono, fontSize: '9px', color: C.dim }}>You · {time}</span>
+          </div>
+          <div style={{ padding: '14px 18px', background: '#16191F', border: `1px solid rgba(255,255,255,0.09)` }}>
+            <p style={{ fontFamily: C.sans, fontSize: '13px', color: C.bright, lineHeight: 1.72, margin: 0 }}>{msg.content}</p>
+          </div>
+        </div>
+      </div>
+    )
   }
 
   return (
-    <Panel>
-      <SectionTitle>CIPHER Q&amp;A</SectionTitle>
-      <div style={{ display: 'flex', gap: 10, marginBottom: 16, alignItems: 'center', flexWrap: 'wrap' }}>
-        <Input
-          value={watchlistInput}
-          onChange={setWatchlistInput}
-          placeholder="Context watchlist (comma-separated)"
-          style={{ maxWidth: 300, flex: '0 0 auto' }}
-        />
-        <Btn variant="ghost" onClick={() => setHistory([])} style={{ whiteSpace: 'nowrap' }}>Clear Chat</Btn>
-      </div>
-
-      {/* Conversation */}
-      {history.length > 0 && (
-        <div style={{
-          minHeight: 120, maxHeight: 420, overflowY: 'auto',
-          background: 'rgba(0,0,0,0.25)', border: `1px solid ${C.border}`,
-          padding: '12px', marginBottom: 12,
-        }}>
-          {history.map((msg, i) => (
-            <div key={i} style={{ marginBottom: 12 }}>
-              <span style={{
-                fontSize: '8px', fontFamily: C.mono, letterSpacing: '0.14em',
-                textTransform: 'uppercase', fontWeight: 700,
-                color: msg.role === 'user' ? C.lime : C.cyan,
-                marginBottom: 4, display: 'block',
-              }}>
-                {msg.role === 'user' ? 'You' : 'CIPHER'}
-              </span>
-              {msg.role === 'assistant'
-                ? <BriefRenderer text={msg.content} />
-                : <p style={{ fontSize: '11px', color: C.bright, fontFamily: C.mono, lineHeight: 1.65 }}>{msg.content}</p>
-              }
-            </div>
-          ))}
-          {loading && (
-            <div>
-              <span style={{ fontSize: '8px', fontFamily: C.mono, letterSpacing: '0.14em', textTransform: 'uppercase', fontWeight: 700, color: C.cyan, display: 'block', marginBottom: 4 }}>CIPHER</span>
-              <p style={{ fontSize: '11px', color: C.dim, fontFamily: C.mono }}>Thinking...</p>
-            </div>
-          )}
-          <div ref={bottomRef} />
+    <div style={{ marginBottom: 28, padding: '0 28px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+        <div style={{ width: 28, height: 28, background: `${C.cyan}14`, border: `1px solid ${C.cyan}35`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+          <Bot size={13} color={C.cyan} />
         </div>
-      )}
-
-      {err && <p style={{ color: C.red, fontSize: '10px', marginBottom: 8 }}>{err}</p>}
-
-      <div style={{ display: 'flex', gap: 10 }}>
-        <Input
-          value={question}
-          onChange={setQuestion}
-          placeholder="Ask CIPHER anything about the market..."
-          onKeyDown={e => e.key === 'Enter' && !e.shiftKey && ask()}
-        />
-        <Btn onClick={ask} loading={loading} variant="cyan" style={{ whiteSpace: 'nowrap' }}>Ask</Btn>
+        <span style={{ fontFamily: C.mono, fontSize: '9px', fontWeight: 700, color: C.cyan, letterSpacing: '0.14em', textTransform: 'uppercase' }}>CIPHER</span>
+        <span style={{ fontFamily: C.mono, fontSize: '9px', color: C.dim }}>{time}</span>
       </div>
-      <p style={{ marginTop: 6, fontSize: '9px', color: C.dim, fontFamily: C.mono }}>Enter to send</p>
-    </Panel>
+      <div style={{ paddingLeft: 38 }}>
+        <Markdown text={msg.content} />
+      </div>
+    </div>
   )
 }
 
-// ── gate ──────────────────────────────────────────────────────────────────────
+function TypingDots() {
+  return (
+    <div style={{ marginBottom: 24, padding: '0 28px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+        <div style={{ width: 28, height: 28, background: `${C.cyan}14`, border: `1px solid ${C.cyan}35`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+          <Bot size={13} color={C.cyan} />
+        </div>
+        <span style={{ fontFamily: C.mono, fontSize: '9px', fontWeight: 700, color: C.cyan, letterSpacing: '0.14em', textTransform: 'uppercase' }}>CIPHER</span>
+      </div>
+      <div style={{ paddingLeft: 38, display: 'flex', alignItems: 'center', gap: 5, height: 20 }}>
+        {[0, 1, 2].map(i => (
+          <span key={i} style={{ width: 7, height: 7, borderRadius: '50%', background: C.cyan + '55', display: 'inline-block', animation: `adeAdminBounce 1.3s ease-in-out ${i * 0.18}s infinite` }} />
+        ))}
+      </div>
+    </div>
+  )
+}
 
+const STARTER_PROMPTS = [
+  'What does NVDA look like for a swing trade right now?',
+  'Is the market regime favorable for buying dips?',
+  'Compare the signals on SPY and QQQ',
+  'What are the highest-confidence setups in my watchlist?',
+]
+
+function ChatTab({ adminKey }) {
+  const [messages, setMessages] = useState([])
+  const [input, setInput] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [err, setErr] = useState('')
+  const [watchlist, setWatchlist] = useState('SPY, QQQ, NVDA')
+  const [showCtx, setShowCtx] = useState(false)
+  const bottomRef = useRef(null)
+  const inputRef = useRef(null)
+  const textareaRef = useRef(null)
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [messages, loading])
+
+  const send = async () => {
+    const q = input.trim()
+    if (!q || loading) return
+    setInput(''); setErr('')
+    if (textareaRef.current) textareaRef.current.style.height = 'auto'
+
+    const wl = watchlist.split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
+    const ts = new Date().toISOString()
+    const updated = [...messages, { role: 'user', content: q, ts }]
+    setMessages(updated)
+    setLoading(true)
+
+    try {
+      const data = await adminJson('/admin/panel/ask', 'POST', { question: q, watchlist: wl, session_id: 'admin-session' }, adminKey)
+      setMessages([...updated, { role: 'assistant', content: data.reply, ts: new Date().toISOString() }])
+    } catch (e) {
+      setErr(e.message)
+    }
+    setLoading(false)
+    setTimeout(() => textareaRef.current?.focus(), 60)
+  }
+
+  const onKeyDown = (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault()
+      send()
+    }
+  }
+
+  const onInputChange = (e) => {
+    setInput(e.target.value)
+    const ta = e.target
+    ta.style.height = 'auto'
+    ta.style.height = Math.min(ta.scrollHeight, 160) + 'px'
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+      {/* Header */}
+      <div style={{ padding: '14px 28px', borderBottom: `1px solid ${C.border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span style={{ width: 8, height: 8, borderRadius: '50%', background: C.green, boxShadow: `0 0 8px ${C.green}`, flexShrink: 0 }} />
+          <span style={{ fontFamily: C.mono, fontSize: '10px', fontWeight: 700, color: C.bright, letterSpacing: '0.12em', textTransform: 'uppercase' }}>CIPHER</span>
+          <span style={{ fontFamily: C.mono, fontSize: '9px', color: C.dim }}>admin mode · apex tier · no rate limits</span>
+        </div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button onClick={() => setShowCtx(o => !o)} style={{ fontFamily: C.mono, fontSize: '9px', color: showCtx ? C.bright : C.dim, background: showCtx ? 'rgba(255,255,255,0.06)' : 'transparent', border: `1px solid ${showCtx ? C.borderFocus : C.border}`, padding: '5px 12px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 5, letterSpacing: '0.10em', textTransform: 'uppercase', transition: 'all 0.15s' }}>
+            <Settings size={10} /> Context {showCtx ? <ChevronUp size={9} /> : <ChevronDown size={9} />}
+          </button>
+          {messages.length > 0 && (
+            <button onClick={() => { setMessages([]); setErr('') }} style={{ fontFamily: C.mono, fontSize: '9px', color: C.dim, background: 'transparent', border: `1px solid ${C.border}`, padding: '5px 12px', cursor: 'pointer', letterSpacing: '0.10em', textTransform: 'uppercase' }}>
+              Clear
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Context panel */}
+      {showCtx && (
+        <div style={{ padding: '14px 28px', borderBottom: `1px solid ${C.border}`, background: '#0A0B0E', flexShrink: 0 }}>
+          <div style={{ fontFamily: C.mono, fontSize: '8px', color: C.dim, letterSpacing: '0.16em', textTransform: 'uppercase', marginBottom: 7 }}>Signal Context Watchlist</div>
+          <input
+            value={watchlist}
+            onChange={e => setWatchlist(e.target.value)}
+            placeholder="SPY, QQQ, NVDA..."
+            style={{ width: '100%', maxWidth: 340, background: C.input, border: `1px solid ${C.border}`, color: C.bright, fontFamily: C.mono, fontSize: '11px', padding: '8px 12px', outline: 'none', transition: 'border-color 0.15s' }}
+            onFocus={e => e.target.style.borderColor = C.borderFocus}
+            onBlur={e => e.target.style.borderColor = C.border}
+          />
+          <p style={{ fontFamily: C.mono, fontSize: '9px', color: C.dim, marginTop: 6 }}>CIPHER generates live signals for these tickers before answering</p>
+        </div>
+      )}
+
+      {/* Messages area */}
+      <div style={{ flex: 1, overflowY: 'auto', paddingTop: 20 }}>
+        {messages.length === 0 && !loading && (
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '70%', padding: '32px 28px', textAlign: 'center' }}>
+            <div style={{ width: 60, height: 60, background: `${C.cyan}10`, border: `1px solid ${C.cyan}28`, display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 20 }}>
+              <Bot size={26} color={C.cyan} />
+            </div>
+            <h3 style={{ fontFamily: C.sans, fontSize: '18px', fontWeight: 600, color: C.bright, marginBottom: 8 }}>CIPHER is ready</h3>
+            <p style={{ fontFamily: C.sans, fontSize: '13px', color: C.mid, maxWidth: 420, lineHeight: 1.7, marginBottom: 28 }}>
+              Ask about specific tickers, regime analysis, signal interpretation, or options setups. CIPHER fetches live signals before responding.
+            </p>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, maxWidth: 540, width: '100%' }}>
+              {STARTER_PROMPTS.map(p => (
+                <button key={p} onClick={() => { setInput(p); setTimeout(() => textareaRef.current?.focus(), 50) }}
+                  style={{ textAlign: 'left', padding: '12px 14px', background: C.panel, border: `1px solid ${C.border}`, color: C.mid, fontFamily: C.sans, fontSize: '12px', cursor: 'pointer', lineHeight: 1.5, transition: 'border-color 0.15s, color 0.15s' }}
+                  onMouseEnter={e => { e.currentTarget.style.borderColor = C.borderFocus; e.currentTarget.style.color = C.text }}
+                  onMouseLeave={e => { e.currentTarget.style.borderColor = C.border; e.currentTarget.style.color = C.mid }}
+                >
+                  {p}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {messages.map((msg, i) => <ChatMessage key={i} msg={msg} />)}
+        {loading && <TypingDots />}
+        {err && (
+          <div style={{ margin: '0 28px 20px', padding: '10px 14px', background: `${C.red}10`, border: `1px solid ${C.red}30`, color: C.red, fontFamily: C.mono, fontSize: '11px' }}>
+            {err}
+          </div>
+        )}
+        <div ref={bottomRef} />
+      </div>
+
+      {/* Input bar */}
+      <div style={{ borderTop: `1px solid ${C.border}`, padding: '16px 28px', background: '#0A0B0E', flexShrink: 0 }}>
+        <div style={{ display: 'flex', gap: 0, background: C.panel, border: `1px solid ${C.border}`, transition: 'border-color 0.15s' }}
+          onFocusCapture={e => e.currentTarget.style.borderColor = C.borderFocus}
+          onBlurCapture={e => e.currentTarget.style.borderColor = C.border}
+        >
+          <textarea
+            ref={textareaRef}
+            value={input}
+            onChange={onInputChange}
+            onKeyDown={onKeyDown}
+            placeholder="Ask CIPHER about the market…"
+            rows={1}
+            style={{ flex: 1, background: 'transparent', border: 'none', color: C.bright, fontFamily: C.sans, fontSize: '13px', padding: '14px 16px', outline: 'none', resize: 'none', lineHeight: 1.6, maxHeight: 160, overflow: 'auto' }}
+          />
+          <button onClick={send} disabled={loading || !input.trim()} style={{ padding: '0 16px', background: input.trim() && !loading ? C.lime : 'transparent', border: 'none', cursor: input.trim() && !loading ? 'pointer' : 'default', display: 'flex', alignItems: 'flex-end', paddingBottom: 14, transition: 'background 0.15s', flexShrink: 0 }}>
+            <Send size={15} color={input.trim() && !loading ? '#000' : 'rgba(255,255,255,0.18)'} />
+          </button>
+        </div>
+        <p style={{ fontFamily: C.mono, fontSize: '9px', color: 'rgba(255,255,255,0.18)', marginTop: 7 }}>
+          Enter to send · Shift+Enter for new line
+        </p>
+      </div>
+    </div>
+  )
+}
+
+// ── Gate ──────────────────────────────────────────────────────────────────────
 function Gate({ onUnlock }) {
   const [key, setKey] = useState('')
   const [err, setErr] = useState('')
   const [loading, setLoading] = useState(false)
 
   const attempt = async () => {
-    if (!key.trim()) return
+    if (!key.trim() || loading) return
     setLoading(true); setErr('')
     try {
       await adminJson('/admin/panel/status', 'GET', null, key.trim())
       sessionStorage.setItem(SK, key.trim())
       onUnlock(key.trim())
     } catch (e) {
-      setErr(e.message.includes('403') || e.message.toLowerCase().includes('invalid') ? 'Invalid admin key' : e.message)
+      const msg = e.message
+      setErr(msg.includes('503') ? 'ADMIN_SECRET_KEY not set on server — add it in Render environment variables' : msg.includes('403') || msg.toLowerCase().includes('invalid') || msg.toLowerCase().includes('forbidden') ? 'Invalid admin key' : msg)
     }
     setLoading(false)
   }
 
   return (
-    <div style={{
-      minHeight: '100vh', background: C.bg, display: 'flex', alignItems: 'center',
-      justifyContent: 'center', padding: 32,
-    }}>
-      <div style={{ maxWidth: 400, width: '100%' }}>
-        <Label>Admin Access</Label>
-        <h1 style={{ fontSize: 28, fontWeight: 900, color: C.bright, margin: '12px 0 8px', letterSpacing: '-0.02em' }}>
-          ADE Admin Panel
-        </h1>
-        <p style={{ fontSize: 11, color: C.dim, fontFamily: C.mono, marginBottom: 24, lineHeight: 1.7 }}>
-          Enter your <code style={{ color: C.lime }}>ADMIN_SECRET_KEY</code> to access the testing console.
+    <div style={{ position: 'fixed', inset: 0, zIndex: 9999, background: C.bg, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+      <div style={{ maxWidth: 380, width: '100%' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 36 }}>
+          <div style={{ width: 34, height: 34, background: C.lime, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+            <span style={{ fontFamily: C.mono, fontSize: '15px', fontWeight: 900, color: '#000' }}>A</span>
+          </div>
+          <div>
+            <div style={{ fontFamily: C.mono, fontSize: '10px', fontWeight: 700, letterSpacing: '0.22em', textTransform: 'uppercase', color: C.bright, lineHeight: 1 }}>ADE</div>
+            <div style={{ fontFamily: C.mono, fontSize: '8px', color: C.dim, letterSpacing: '0.14em', textTransform: 'uppercase', marginTop: 2 }}>Admin Console</div>
+          </div>
+        </div>
+
+        <h1 style={{ fontFamily: C.sans, fontSize: '24px', fontWeight: 700, color: C.bright, marginBottom: 8, letterSpacing: '-0.02em' }}>Sign in</h1>
+        <p style={{ fontFamily: C.sans, fontSize: '13px', color: C.mid, marginBottom: 28, lineHeight: 1.65 }}>
+          Enter your <code style={{ fontFamily: C.mono, color: C.lime, fontSize: '11px', background: 'rgba(204,255,0,0.08)', padding: '2px 6px' }}>ADMIN_SECRET_KEY</code> to access the testing console.
         </p>
-        <Input
+
+        <input
           type="password"
           value={key}
-          onChange={setKey}
-          placeholder="Admin secret key"
+          onChange={e => setKey(e.target.value)}
           onKeyDown={e => e.key === 'Enter' && attempt()}
-          style={{ marginBottom: 10 }}
+          placeholder="Admin secret key"
+          autoFocus
+          style={{ width: '100%', background: C.panel, border: `1px solid ${C.border}`, color: C.bright, fontFamily: C.sans, fontSize: '14px', padding: '13px 16px', outline: 'none', marginBottom: 10, boxSizing: 'border-box', transition: 'border-color 0.15s' }}
+          onFocus={e => e.target.style.borderColor = C.borderFocus}
+          onBlur={e => e.target.style.borderColor = C.border}
         />
-        {err && <p style={{ color: C.red, fontSize: '10px', fontFamily: C.mono, marginBottom: 10 }}>{err}</p>}
-        <Btn onClick={attempt} loading={loading} style={{ width: '100%', justifyContent: 'center', display: 'flex' }}>
-          Unlock Panel
-        </Btn>
-        <p style={{ marginTop: 16, fontSize: '9px', color: 'rgba(255,255,255,0.18)', fontFamily: C.mono }}>
-          Session-only storage — key clears when tab closes.
+
+        {err && <div style={{ padding: '10px 14px', background: `${C.red}10`, border: `1px solid ${C.red}30`, color: C.red, fontFamily: C.sans, fontSize: '12px', marginBottom: 10, lineHeight: 1.5 }}>{err}</div>}
+
+        <button onClick={attempt} disabled={loading || !key.trim()} style={{ width: '100%', padding: '13px', background: C.lime, color: '#000', border: 'none', fontFamily: C.sans, fontWeight: 700, fontSize: '14px', cursor: loading || !key.trim() ? 'not-allowed' : 'pointer', opacity: !key.trim() ? 0.45 : 1, letterSpacing: '0.01em', transition: 'opacity 0.15s' }}>
+          {loading ? 'Verifying…' : 'Continue →'}
+        </button>
+
+        <p style={{ fontFamily: C.mono, fontSize: '9px', color: 'rgba(255,255,255,0.18)', marginTop: 16, textAlign: 'center', letterSpacing: '0.06em' }}>
+          Session-only · clears when tab closes
         </p>
       </div>
     </div>
   )
 }
 
-// ── main page ─────────────────────────────────────────────────────────────────
+// ── Sidebar ───────────────────────────────────────────────────────────────────
+function Sidebar({ activeTab, setTab, onLock }) {
+  return (
+    <div style={{ width: 224, flexShrink: 0, display: 'flex', flexDirection: 'column', background: C.sidebar, borderRight: `1px solid ${C.border}`, height: '100%' }}>
+      <div style={{ padding: '20px 18px 16px', borderBottom: `1px solid ${C.border}` }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div style={{ width: 28, height: 28, background: C.lime, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+            <span style={{ fontFamily: C.mono, fontSize: '12px', fontWeight: 900, color: '#000' }}>A</span>
+          </div>
+          <div>
+            <div style={{ fontFamily: C.mono, fontSize: '10px', fontWeight: 700, letterSpacing: '0.20em', textTransform: 'uppercase', color: C.bright, lineHeight: 1 }}>ADE</div>
+            <div style={{ fontFamily: C.mono, fontSize: '8px', color: C.dim, letterSpacing: '0.12em', textTransform: 'uppercase', marginTop: 2 }}>Admin Console</div>
+          </div>
+        </div>
+      </div>
 
+      <nav style={{ flex: 1, padding: '10px 10px 0' }}>
+        <div style={{ fontFamily: C.mono, fontSize: '8px', color: C.dim, letterSpacing: '0.16em', textTransform: 'uppercase', padding: '10px 10px 8px' }}>Tools</div>
+        {TABS.map(({ id, label, Icon, desc }) => {
+          const active = activeTab === id
+          return (
+            <button key={id} onClick={() => setTab(id)} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', marginBottom: 1, background: active ? 'rgba(204,255,0,0.07)' : 'transparent', border: `1px solid ${active ? 'rgba(204,255,0,0.15)' : 'transparent'}`, borderLeft: `2px solid ${active ? C.lime : 'transparent'}`, cursor: 'pointer', textAlign: 'left', transition: 'all 0.15s' }}
+              onMouseEnter={e => { if (!active) e.currentTarget.style.background = 'rgba(255,255,255,0.03)' }}
+              onMouseLeave={e => { if (!active) e.currentTarget.style.background = 'transparent' }}
+            >
+              <Icon size={14} color={active ? C.lime : C.dim} style={{ flexShrink: 0 }} />
+              <div>
+                <div style={{ fontFamily: C.mono, fontSize: '10px', fontWeight: active ? 700 : 400, color: active ? C.lime : C.mid, letterSpacing: '0.08em', textTransform: 'uppercase', lineHeight: 1.2 }}>{label}</div>
+                <div style={{ fontFamily: C.mono, fontSize: '8px', color: C.dim, marginTop: 2 }}>{desc}</div>
+              </div>
+            </button>
+          )
+        })}
+      </nav>
+
+      <div style={{ padding: '12px 10px', borderTop: `1px solid ${C.border}` }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '6px 12px', marginBottom: 6 }}>
+          <span style={{ width: 6, height: 6, borderRadius: '50%', background: C.green, boxShadow: `0 0 6px ${C.green}`, flexShrink: 0 }} />
+          <span style={{ fontFamily: C.mono, fontSize: '9px', color: C.dim, letterSpacing: '0.10em' }}>Authenticated</span>
+        </div>
+        <button onClick={onLock} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', background: 'transparent', border: `1px solid ${C.border}`, cursor: 'pointer', color: C.dim, transition: 'all 0.15s' }}
+          onMouseEnter={e => { e.currentTarget.style.borderColor = C.borderFocus; e.currentTarget.style.color = C.mid }}
+          onMouseLeave={e => { e.currentTarget.style.borderColor = C.border; e.currentTarget.style.color = C.dim }}
+        >
+          <Lock size={11} />
+          <span style={{ fontFamily: C.mono, fontSize: '9px', letterSpacing: '0.10em', textTransform: 'uppercase' }}>Lock Session</span>
+        </button>
+      </div>
+    </div>
+  )
+}
+
+// ── Root ──────────────────────────────────────────────────────────────────────
 export default function AdminDashboard() {
   const [adminKey, setAdminKey] = useState(() => sessionStorage.getItem(SK) || '')
   const [unlocked, setUnlocked] = useState(false)
+  const [activeTab, setActiveTab] = useState('chat')
 
-  useEffect(() => {
-    if (adminKey) setUnlocked(true)
-  }, [])
+  useEffect(() => { if (adminKey) setUnlocked(true) }, [])
+
+  const lock = () => { sessionStorage.removeItem(SK); setAdminKey(''); setUnlocked(false) }
 
   if (!unlocked) {
-    return <Gate onUnlock={(k) => { setAdminKey(k); setUnlocked(true) }} />
+    return <Gate onUnlock={k => { setAdminKey(k); setUnlocked(true) }} />
+  }
+
+  const content = {
+    chat:   <ChatTab   adminKey={adminKey} />,
+    prism:  <PrismTab  adminKey={adminKey} />,
+    brief:  <BriefTab  adminKey={adminKey} />,
+    status: <StatusTab adminKey={adminKey} />,
   }
 
   return (
-    <div style={{ minHeight: '100vh', background: C.bg, color: C.bright, fontFamily: C.mono }}>
-      {/* Header */}
-      <div style={{
-        borderBottom: `1px solid ${C.border}`, padding: '14px 24px',
-        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        background: C.panel, position: 'sticky', top: 0, zIndex: 100,
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <span style={{ fontSize: '10px', fontWeight: 900, letterSpacing: '0.22em', textTransform: 'uppercase', color: C.lime }}>ADE</span>
-          <span style={{ color: C.border, fontSize: '18px' }}>|</span>
-          <span style={{ fontSize: '9px', letterSpacing: '0.18em', textTransform: 'uppercase', color: C.dim }}>Admin Console</span>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <Dot on={true} />
-          <span style={{ fontSize: '9px', color: C.dim, letterSpacing: '0.10em' }}>Authenticated</span>
-          <Btn
-            variant="ghost"
-            onClick={() => { sessionStorage.removeItem(SK); setUnlocked(false); setAdminKey('') }}
-            style={{ fontSize: '8px' }}
-          >
-            Lock
-          </Btn>
-        </div>
+    <>
+      <style>{`
+        @keyframes adeAdminBounce {
+          0%, 60%, 100% { transform: translateY(0); opacity: 0.55; }
+          30% { transform: translateY(-7px); opacity: 1; }
+        }
+        @keyframes adeAdminSpin {
+          from { transform: rotate(0deg); }
+          to   { transform: rotate(360deg); }
+        }
+        .ade-admin-root *, .ade-admin-root *::before, .ade-admin-root *::after { box-sizing: border-box; margin: 0; padding: 0; }
+        .ade-admin-root textarea::placeholder, .ade-admin-root input::placeholder { color: rgba(255,255,255,0.22); }
+        .ade-admin-root textarea { font-family: ${C.sans}; }
+      `}</style>
+      <div className="ade-admin-root" style={{ position: 'fixed', inset: 0, zIndex: 9999, display: 'flex', background: C.bg, color: C.text, overflow: 'hidden' }}>
+        <Sidebar activeTab={activeTab} setTab={setActiveTab} onLock={lock} />
+        <main style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minWidth: 0 }}>
+          {content[activeTab]}
+        </main>
       </div>
-
-      {/* Content */}
-      <div style={{ maxWidth: 1100, margin: '0 auto', padding: '28px 24px', display: 'flex', flexDirection: 'column', gap: 20 }}>
-        <StatusSection adminKey={adminKey} />
-        <PrismSection adminKey={adminKey} />
-        <CipherBriefSection adminKey={adminKey} />
-        <CipherAskSection adminKey={adminKey} />
-      </div>
-    </div>
+    </>
   )
 }
