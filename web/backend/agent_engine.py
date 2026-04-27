@@ -8,7 +8,7 @@ confident, precise, occasionally dry. Never generic. Always personalized.
 import json
 import logging
 import os
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional
 import anthropic  # type: ignore
 
@@ -51,48 +51,43 @@ Formatting rules:
 - If a symbol has no meaningful signal, say "No edge today on [SYM] — standing by." Don't invent conviction you don't have."""
 
 
-# ── CIPHER Q&A prompt — used for interactive questions. No template. Web search enabled. ──
+# ── CIPHER Q&A prompt — used for interactive questions. No template. Web search + live quotes. ──
 CIPHER_QA_SYSTEM_PROMPT = """You are CIPHER — the personal market intelligence agent for Apex Decision Engine.
 
-You are a professional trading analyst with real-time web search access. Use it.
+You have two tools: web_search (real-time news/catalysts) and get_stock_quote (live price from market feed).
 
-## How to handle trade questions
+## Critical workflow for trade questions
 
-Before answering any market or trade question, search the web for current information:
-- Search for specific catalysts: "QCOM OpenAI chip deal stock April 2026", not generic "markets today"
-- Search for earnings dates, premarket movers, analyst ratings, sector news
-- Search 2–5 times with targeted queries — each search should add a new angle
-- Use today's date when searching so you get current results
+1. **Search first** — use web_search to find today's catalysts, earnings, premarket movers, news. Search specifically ("OGN acquisition Sun Pharma April 2026") not generically ("markets today"). 2–5 targeted searches.
 
-After researching, commit to a complete trade plan:
-- **Instrument**: exact stock, ETF, options contract (symbol, strike, expiry, call/put), or futures contract (e.g. CLM26)
-- **Entry zone**: specific price range, not "look for an entry near support"
-- **Exit target**: specific price or date, not "exit when the trade works"
-- **Stop-loss**: specific level where the thesis is wrong
-- **Timing**: exact exit deadline (e.g. "sell by Tuesday EOD before earnings Wednesday")
-- **Thesis**: 2–3 sentences — the actual catalyst, not "momentum trade"
+2. **Get live prices** — for EVERY ticker you plan to recommend, call get_stock_quote BEFORE writing an entry price. News articles quote prices from when they were published, which may be hours or days ago. The stock may have already moved. get_stock_quote gives the current real-time price.
+
+3. **Then write the trade** — using the live price as your anchor, not the price in the article.
+
+## Trade plan requirements
+
+Every trade must include:
+- **Instrument**: exact ticker, or for options: full contract spec (symbol, strike, expiry, call/put)
+- **Entry zone**: built from the live quote you fetched, e.g. "OGN is at $13.18 live — enter $13.00–$13.30"
+- **Exit target**: specific price, e.g. "$13.85 (95% of the $14 deal price)"
+- **Stop-loss**: specific level where thesis is broken, e.g. "below $12.50 — deal arb spread too wide"
+- **Timing**: exact deadline, e.g. "close by Tuesday 3:45 PM CT — do not hold overnight"
+- **Thesis**: 2–3 sentences on the actual catalyst with real numbers
 
 ## Quality standards
 
-Reference real data you found: "up 13% premarket after Ming-Chi Kuo reported OpenAI partnership" is analysis. "Momentum trade" is not.
-
-For options, include: implied volatility context, earnings risk, and whether you're buying or spreading. For futures, include contract size ($1,000/point for CL, $20/point for NQ) and margin awareness.
-
-Two uncorrelated trades are better than two trades on the same macro thesis. If asked for 2 trades: one short-duration catalyst play and one multi-day structural play.
-
-Do not limit yourself to the user's watchlist. Search the entire market for the best setups.
+- Always acknowledge how far the stock has already moved vs the article's reported price. "OGN is already at $13.18 — the easy 16% gap is behind us. Here's what's left."
+- For options: state whether IV is elevated vs historical, and size the trade accordingly
+- For futures: include contract value ($1,000/point CL, $20/point NQ) and exact expiry
+- Two uncorrelated trades are better than two on the same macro thesis
 
 ## Style
 
-Direct, analytical, occasionally dry. Write like a seasoned desk analyst briefing a trader — not a template-filling chatbot.
+Write like a seasoned desk analyst. Natural prose, not bullet-point templates. Commit to views — no "monitor closely" or "it depends."
 
-Write in natural analytical prose. Not rigid sections like "Trade 1 | Catalyst | Entry | Exit." Let the writing flow — use headers only when they genuinely help structure a long answer.
+Do NOT use the daily brief format (Market Pulse / Watchlist / The Edge / Heads Up). Answer what was asked.
 
-No filler: no "monitor closely," "keep an eye on," "it depends." Commit to the trade and explain why.
-
-**Do NOT use the daily brief format (Market Pulse / Watchlist / The Edge / Heads Up) for Q&A responses.** That format is for morning briefings only.
-
-End every response with a single italicized line: *This is intelligence, not advice. Trade responsibly.*"""
+End every response with: *This is intelligence, not advice. Trade responsibly.*"""
 
 
 def _compact_signal(sig: Dict[str, Any]) -> Dict[str, Any]:
@@ -188,13 +183,16 @@ async def answer_question(
     model  = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
 
     compact_signals = [_compact_signal(s) for s in signals]
-    today_str = date.today().strftime("%B %d, %Y")
+    now_utc = datetime.now(timezone.utc)
+    now_str = now_utc.strftime("%A %B %d, %Y — %I:%M %p UTC")
+    market_open = 13 <= now_utc.hour < 20  # 9:30 AM–4:00 PM ET in UTC
     ctx = (
-        f"Today: {today_str}\n"
+        f"Current time: {now_str} (subtract 5h for EDT, 6h for CDT)\n"
+        f"Market session: {'OPEN' if market_open else 'PRE/AFTER-HOURS or CLOSED'}\n"
         f"Market regime: {regime.get('regime', 'NEUTRAL')} | "
         f"SPY vs 200MA: {regime.get('spy_vs_200ma', 0):+.1f}% | "
         f"VIX: {regime.get('vix_level', 'NORMAL')}\n"
-        f"Watchlist quant signals (supplementary — search the web for current data before answering): "
+        f"Watchlist quant signals (supplementary — use get_stock_quote for live prices): "
         f"{json.dumps(compact_signals, separators=(',', ':'))}"
     )
 
@@ -212,7 +210,44 @@ async def answer_question(
         }
     ]
 
-    tools = [{"type": "web_search_20250305", "name": "web_search", "max_uses": 5}]
+    tools = [
+        {"type": "web_search_20250305", "name": "web_search", "max_uses": 5},
+        {
+            "name": "get_stock_quote",
+            "description": (
+                "Fetch the current real-time price, daily change %, and volume for a ticker. "
+                "ALWAYS call this before stating any entry price for a trade. "
+                "Web search article prices may be hours or days stale — this returns the live market price."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "symbol": {
+                        "type": "string",
+                        "description": "Ticker symbol, e.g. 'OGN', 'SNDK', 'SPY'",
+                    }
+                },
+                "required": ["symbol"],
+            },
+        },
+    ]
+
+    def _fetch_quote(symbol: str) -> str:
+        try:
+            from web.backend.app import connector as _conn  # type: ignore
+            q = _conn.market_data.fetch_quote(symbol.upper().strip())
+            return json.dumps(q)
+        except Exception:
+            try:
+                import yfinance as yf  # type: ignore
+                info = yf.Ticker(symbol.upper().strip()).fast_info
+                return json.dumps({
+                    "symbol": symbol.upper(),
+                    "price": round(float(info.last_price), 2),
+                    "volume": int(getattr(info, "three_month_average_volume", 0) or 0),
+                })
+            except Exception as exc2:
+                return json.dumps({"error": str(exc2), "symbol": symbol})
 
     try:
         response = client.messages.create(
@@ -223,13 +258,14 @@ async def answer_question(
             tools=tools,
         )
 
-        # Handle the tool-use loop. For web_search_20250305, Anthropic executes searches
-        # server-side; results are embedded in response.content. We pass the full content
-        # back as the assistant turn and continue until stop_reason is end_turn.
+        # Tool-use loop:
+        # - web_search_20250305 (server-side): results already embedded in response.content,
+        #   just pass the full assistant content back and continue.
+        # - get_stock_quote (client-side): we execute it and add tool_result blocks.
         iterations = 0
-        while response.stop_reason == "tool_use" and iterations < 6:
+        while response.stop_reason == "tool_use" and iterations < 8:
             iterations += 1
-            # Serialize content blocks — SDK objects need model_dump for JSON serialization
+
             assistant_content = []
             for block in response.content:
                 if hasattr(block, "model_dump"):
@@ -237,9 +273,28 @@ async def answer_question(
                 elif isinstance(block, dict):
                     assistant_content.append(block)
                 else:
-                    assistant_content.append(str(block))
-
+                    assistant_content.append({"type": "text", "text": str(block)})
             messages.append({"role": "assistant", "content": assistant_content})
+
+            # Handle client-side get_stock_quote calls
+            client_results = []
+            for block in response.content:
+                btype  = getattr(block, "type",  None) if not isinstance(block, dict) else block.get("type")
+                bname  = getattr(block, "name",  None) if not isinstance(block, dict) else block.get("name")
+                bid    = getattr(block, "id",    None) if not isinstance(block, dict) else block.get("id")
+                binput = getattr(block, "input", {})   if not isinstance(block, dict) else block.get("input", {})
+
+                if btype == "tool_use" and bname == "get_stock_quote":
+                    sym = (binput or {}).get("symbol", "")
+                    client_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": bid,
+                        "content": _fetch_quote(sym),
+                    })
+
+            if client_results:
+                messages.append({"role": "user", "content": client_results})
+
             response = client.messages.create(
                 model=model,
                 max_tokens=3000,
@@ -248,17 +303,14 @@ async def answer_question(
                 tools=tools,
             )
 
-        # Extract text from final response (may have multiple text blocks)
-        text_parts = []
-        for block in response.content:
-            if hasattr(block, "type") and block.type == "text" and getattr(block, "text", ""):
-                text_parts.append(block.text)
-
+        text_parts = [
+            block.text for block in response.content
+            if hasattr(block, "type") and block.type == "text" and getattr(block, "text", "")
+        ]
         return "\n".join(text_parts) if text_parts else "_CIPHER: no analysis generated._"
 
     except anthropic.BadRequestError as e:
-        # web_search may be unavailable on some API tiers — fall back gracefully
-        logger.warning("web_search unavailable (%s), falling back to no-search mode", e)
+        logger.warning("Tool unavailable (%s), falling back to no-search mode", e)
         return await _answer_no_search(question, compact_signals, regime, history, client, model)
     except Exception as e:
         logger.exception("CIPHER answer failed: %s", e)
