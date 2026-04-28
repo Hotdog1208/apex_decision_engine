@@ -1,9 +1,53 @@
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Link, useNavigate, useLocation } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { LogIn, ShieldCheck } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import Card, { CardBody } from '../components/Card'
+
+function MatrixBg() {
+  const ref = useRef(null)
+  useEffect(() => {
+    const c = ref.current
+    if (!c) return
+    const ctx = c.getContext('2d')
+    let id
+    const CHARS = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ$%↑↓+-·×.'
+    const SZ = 11, CW = 13
+    let cols, drops, speeds, hue
+    const init = () => {
+      c.width = window.innerWidth; c.height = window.innerHeight
+      cols = Math.floor(c.width / CW) + 1
+      drops = Array.from({ length: cols }, () => Math.random() * -(c.height / SZ))
+      speeds = Array.from({ length: cols }, () => 0.14 + Math.random() * 0.42)
+      hue = Array.from({ length: cols }, () => Math.random() > 0.35 ? 'lime' : 'cyan')
+    }
+    const rnd = () => CHARS[Math.floor(Math.random() * CHARS.length)]
+    const draw = () => {
+      ctx.fillStyle = 'rgba(3,5,8,0.046)'
+      ctx.fillRect(0, 0, c.width, c.height)
+      ctx.font = `${SZ}px "Share Tech Mono",monospace`
+      ctx.textAlign = 'center'
+      for (let i = 0; i < cols; i++) {
+        const y = drops[i] * SZ
+        if (y < 0) { drops[i] += speeds[i]; continue }
+        ctx.fillStyle = Math.random() > 0.93 ? '#fff'
+          : hue[i] === 'lime' ? `rgba(204,255,0,${0.04 + Math.random() * 0.28})`
+          : `rgba(0,212,255,${0.04 + Math.random() * 0.28})`
+        ctx.fillText(rnd(), i * CW + CW / 2, y)
+        drops[i] += speeds[i]
+        if (drops[i] * SZ > c.height && Math.random() > 0.975) {
+          drops[i] = -Math.floor(Math.random() * 18)
+          hue[i] = Math.random() > 0.35 ? 'lime' : 'cyan'
+        }
+      }
+      id = requestAnimationFrame(draw)
+    }
+    init(); window.addEventListener('resize', init); draw()
+    return () => { cancelAnimationFrame(id); window.removeEventListener('resize', init) }
+  }, [])
+  return <canvas ref={ref} aria-hidden className="fixed inset-0 w-full h-full pointer-events-none" style={{ opacity: 0.45, zIndex: 0 }} />
+}
 
 export default function Login() {
   const [email, setEmail]       = useState('')
@@ -84,12 +128,24 @@ export default function Login() {
   }
 
   return (
-    <div className="min-h-[calc(100vh-8rem)] flex items-center justify-center px-4 py-8">
+    <div className="relative min-h-screen flex items-center justify-center px-4 py-8" style={{ background: 'var(--bg-void)' }}>
+      <MatrixBg />
+      {/* Scanlines */}
+      <div aria-hidden className="fixed inset-0 pointer-events-none" style={{ zIndex: 1, background: 'repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,0.03) 2px,rgba(0,0,0,0.03) 4px)', mixBlendMode: 'overlay' }} />
+      {/* Center glow */}
+      <div aria-hidden className="fixed inset-0 pointer-events-none" style={{ zIndex: 1, background: 'radial-gradient(ellipse 60% 50% at 50% 50%, rgba(0,212,255,0.03) 0%, transparent 70%)' }} />
+      {/* Corner accents */}
+      <div aria-hidden className="fixed top-0 left-0 w-32 h-px pointer-events-none" style={{ zIndex: 2, background: 'linear-gradient(90deg, rgba(0,212,255,0.5) 0%, transparent 100%)' }} />
+      <div aria-hidden className="fixed top-0 left-0 w-px h-32 pointer-events-none" style={{ zIndex: 2, background: 'linear-gradient(180deg, rgba(0,212,255,0.5) 0%, transparent 100%)' }} />
+      <div aria-hidden className="fixed bottom-0 right-0 w-32 h-px pointer-events-none" style={{ zIndex: 2, background: 'linear-gradient(270deg, rgba(204,255,0,0.4) 0%, transparent 100%)' }} />
+      <div aria-hidden className="fixed bottom-0 right-0 w-px h-32 pointer-events-none" style={{ zIndex: 2, background: 'linear-gradient(0deg, rgba(204,255,0,0.4) 0%, transparent 100%)' }} />
+
       <motion.div
         initial={{ opacity: 0, y: 16 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.3 }}
-        className="w-full max-w-md"
+        transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
+        className="w-full max-w-md relative"
+        style={{ zIndex: 10 }}
       >
         <Card hover className="overflow-hidden">
           <div className="border-b border-white/10 px-6 py-5">

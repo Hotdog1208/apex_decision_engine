@@ -76,18 +76,26 @@ function CustomCursor() {
 }
 
 export default function PageWrapper({ children, className = '' }) {
-  // Attempt simple smooth scroll hijacking concept using framer motion layout wrapper
-  // We wrap the content and add a subtle parallax or smooth entry
-
   return (
     <>
       <CustomCursor />
+      {/* Subtle dot-grid texture across all inner pages */}
+      <div
+        aria-hidden
+        className="fixed inset-0 pointer-events-none"
+        style={{
+          zIndex: 0,
+          backgroundImage: 'radial-gradient(circle, rgba(255,255,255,0.025) 1px, transparent 1px)',
+          backgroundSize: '36px 36px',
+        }}
+      />
       <motion.div
-        initial={{ opacity: 0, y: 40, filter: 'blur(10px)' }}
+        initial={{ opacity: 0, y: 30, filter: 'blur(8px)' }}
         animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }}
-        exit={{ opacity: 0, y: -40, filter: 'blur(10px)' }}
-        transition={{ duration: 0.7, ease: easing }}
-        className={`w-full ${className}`}
+        exit={{ opacity: 0, y: -24, filter: 'blur(6px)' }}
+        transition={{ duration: 0.55, ease: easing }}
+        className={`relative w-full ${className}`}
+        style={{ zIndex: 1 }}
       >
         {children}
       </motion.div>

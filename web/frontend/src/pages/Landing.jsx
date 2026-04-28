@@ -1,737 +1,1399 @@
-import { useRef, useState, useEffect } from 'react'
+import { useRef, useEffect } from 'react'
 import { Link } from 'react-router-dom'
-import { motion, useScroll, useTransform, useSpring, useInView, animate } from 'framer-motion'
 import {
-  BarChart3, Zap, Shield, TrendingUp, Brain, Activity,
-  ArrowRight, ChevronRight, Circle, Lock, Globe,
-  CheckCircle, AlertTriangle, Terminal,
+  motion, useScroll, useTransform, useSpring,
+  useInView, animate, AnimatePresence,
+} from 'framer-motion'
+import {
+  ArrowRight, Terminal, Brain, TrendingUp, Shield,
+  BarChart3, Activity, ChevronRight, CheckCircle2,
+  Globe, Lock, Newspaper, Bot,
 } from 'lucide-react'
-import PageWrapper from '../components/PageWrapper'
-import HeroFuturistic from '../components/HeroFuturistic'
+import { PulseBeams } from '../components/ui/pulse-beams'
+import RadialShader from '../components/ui/radial-shader'
+import LabShader from '../components/ui/lab-shader'
 
 // ─── Animated counter ──────────────────────────────────────────────────────────
-function Counter({ to, suffix = '', prefix = '' }) {
+function Counter({ to, suffix = '', prefix = '', decimal = false }) {
   const ref = useRef(null)
   const [val, setVal] = useState(0)
   const inView = useInView(ref, { once: true, margin: '-60px' })
-
   useEffect(() => {
     if (!inView) return
     const ctrl = animate(0, to, {
-      duration: 1.4,
+      duration: 1.8,
       ease: [0.16, 1, 0.3, 1],
-      onUpdate: v => setVal(Math.round(v * 10) / 10),
+      onUpdate: v => setVal(decimal ? Math.round(v * 10) / 10 : Math.round(v)),
     })
     return () => ctrl.stop()
-  }, [inView, to])
+  }, [inView, to, decimal])
+  return <span ref={ref}>{prefix}{decimal ? val.toFixed(1) : val}{suffix}</span>
+}
 
+// ─── Scanlines ─────────────────────────────────────────────────────────────────
+function Scanlines() {
   return (
-    <span ref={ref}>
-      {prefix}{typeof to === 'number' && to % 1 !== 0 ? val.toFixed(1) : Math.round(val)}{suffix}
-    </span>
+    <div
+      aria-hidden
+      className="pointer-events-none absolute inset-0 z-[5]"
+      style={{
+        background: 'repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,0.03) 2px,rgba(0,0,0,0.03) 4px)',
+        mixBlendMode: 'overlay',
+      }}
+    />
   )
 }
 
-// ─── Mock browser showcase ─────────────────────────────────────────────────────
-function MockBrowserShowcase() {
-  const sectionRef = useRef(null)
-  const { scrollYProgress } = useScroll({ target: sectionRef, offset: ['start end', 'end start'] })
-
-  const rotateX   = useTransform(scrollYProgress, [0, 0.4], [22, 0])
-  const scale     = useTransform(scrollYProgress, [0, 0.4], [0.88, 1])
-  const y         = useTransform(scrollYProgress, [0, 0.5], [60, 0])
-  const opacity   = useTransform(scrollYProgress, [0, 0.15], [0, 1])
-  const glowOp    = useTransform(scrollYProgress, [0.1, 0.5], [0, 0.7])
-
-  const springRotX  = useSpring(rotateX,  { stiffness: 80, damping: 22 })
-  const springScale = useSpring(scale,    { stiffness: 80, damping: 22 })
-
+// ─── HUD corner brackets ───────────────────────────────────────────────────────
+function HudCorners({ color = '#CCFF00', size = 18, thickness = 1.5 }) {
+  const s = { width: size, height: size, position: 'absolute' }
+  const b = `${thickness}px solid ${color}`
   return (
-    <section ref={sectionRef} className="relative overflow-hidden py-32" style={{ background: 'var(--bg-void)' }}>
-      {/* section label */}
-      <div className="max-w-[1440px] mx-auto px-6 mb-16 text-center">
+    <>
+      <span style={{ ...s, top: 0, left: 0,  borderTop: b, borderLeft: b }}  />
+      <span style={{ ...s, top: 0, right: 0, borderTop: b, borderRight: b }} />
+      <span style={{ ...s, bottom: 0, left: 0,  borderBottom: b, borderLeft: b }}  />
+      <span style={{ ...s, bottom: 0, right: 0, borderBottom: b, borderRight: b }} />
+    </>
+  )
+}
+
+// ─── Financial matrix rain ─────────────────────────────────────────────────────
+function MatrixRain({ opacity = 0.55 }) {
+  const ref = useRef(null)
+  useEffect(() => {
+    const c = ref.current
+    if (!c) return
+    const ctx = c.getContext('2d')
+    let id
+    const CHARS = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ$%↑↓+-·×.'
+    const SZ = 11, CW = 13
+    let cols, drops, speeds, hue
+
+    const init = () => {
+      c.width = c.offsetWidth; c.height = c.offsetHeight
+      cols  = Math.floor(c.width / CW) + 1
+      drops = Array.from({ length: cols }, () => Math.random() * -(c.height / SZ))
+      speeds = Array.from({ length: cols }, () => 0.14 + Math.random() * 0.42)
+      hue   = Array.from({ length: cols }, () => Math.random() > 0.32 ? 'lime' : 'cyan')
+    }
+    const rnd = () => CHARS[Math.floor(Math.random() * CHARS.length)]
+    const draw = () => {
+      ctx.fillStyle = 'rgba(3,5,8,0.042)'
+      ctx.fillRect(0, 0, c.width, c.height)
+      ctx.font = `${SZ}px "Share Tech Mono",monospace`
+      ctx.textAlign = 'center'
+      for (let i = 0; i < cols; i++) {
+        const y = drops[i] * SZ
+        if (y < 0) { drops[i] += speeds[i]; continue }
+        const head = Math.random() > 0.93
+        ctx.fillStyle = head ? '#fff'
+          : hue[i] === 'lime'
+            ? `rgba(204,255,0,${0.05 + Math.random() * 0.32})`
+            : `rgba(0,212,255,${0.05 + Math.random() * 0.32})`
+        ctx.fillText(rnd(), i * CW + CW / 2, y)
+        drops[i] += speeds[i]
+        if (drops[i] * SZ > c.height && Math.random() > 0.975) {
+          drops[i] = -Math.floor(Math.random() * 18)
+          hue[i] = Math.random() > 0.32 ? 'lime' : 'cyan'
+        }
+      }
+      id = requestAnimationFrame(draw)
+    }
+    init()
+    window.addEventListener('resize', init)
+    draw()
+    return () => { cancelAnimationFrame(id); window.removeEventListener('resize', init) }
+  }, [])
+  return (
+    <canvas
+      ref={ref}
+      aria-hidden
+      className="absolute inset-0 w-full h-full pointer-events-none"
+      style={{ opacity }}
+    />
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 1 — HERO
+// ─────────────────────────────────────────────────────────────────────────────
+const HERO_BEAMS = [
+  {
+    path: 'M180 390H40C34.48 390 30 385.52 30 380V280',
+    gradientConfig: {
+      initial: { x1:'0%', x2:'0%', y1:'80%', y2:'100%' },
+      animate: { x1:['0%','0%','200%'], x2:['0%','0%','180%'], y1:['80%','0%','0%'], y2:['100%','20%','20%'] },
+      transition: { duration: 2.4, repeat: Infinity, ease: 'linear', delay: 0 },
+    },
+    connectionPoints: [{ cx: 30, cy: 280, r: 5 }, { cx: 180, cy: 390, r: 5 }],
+  },
+  {
+    path: 'M480 390H620C625.52 390 630 385.52 630 380V280',
+    gradientConfig: {
+      initial: { x1:'100%', x2:'100%', y1:'80%', y2:'100%' },
+      animate: { x1:['100%','100%','-100%'], x2:['100%','100%','-80%'], y1:['80%','0%','0%'], y2:['100%','20%','20%'] },
+      transition: { duration: 2.4, repeat: Infinity, ease: 'linear', delay: 0.8 },
+    },
+    connectionPoints: [{ cx: 630, cy: 280, r: 5 }, { cx: 480, cy: 390, r: 5 }],
+  },
+  {
+    path: 'M330 80V30C330 24.48 334.48 20 340 20H380',
+    gradientConfig: {
+      initial: { x1:'-40%', x2:'-10%', y1:'0%', y2:'20%' },
+      animate: { x1:['40%','0%','0%'], x2:['10%','0%','0%'], y1:['0%','0%','180%'], y2:['20%','20%','200%'] },
+      transition: { duration: 2.2, repeat: Infinity, ease: 'linear', delay: 1.4 },
+    },
+    connectionPoints: [{ cx: 386, cy: 20, r: 5 }, { cx: 330, cy: 80, r: 5 }],
+  },
+]
+
+function HeroSection() {
+  return (
+    <section
+      className="relative overflow-hidden flex flex-col items-center justify-center"
+      style={{ minHeight: '100vh', background: 'var(--bg-void)' }}
+    >
+      {/* Matrix rain */}
+      <MatrixRain opacity={0.52} />
+
+      {/* Scanlines */}
+      <Scanlines />
+
+      {/* Central radial glow */}
+      <div
+        aria-hidden
+        className="absolute inset-0 pointer-events-none"
+        style={{
+          background:
+            'radial-gradient(ellipse 80% 55% at 50% 50%, rgba(204,255,0,0.04) 0%, rgba(0,212,255,0.02) 40%, transparent 70%)',
+        }}
+      />
+
+      {/* Corner accent lines */}
+      <div aria-hidden className="absolute top-0 left-0 w-48 h-px" style={{ background: 'linear-gradient(90deg, rgba(204,255,0,0.5) 0%, transparent 100%)' }} />
+      <div aria-hidden className="absolute top-0 left-0 w-px h-48" style={{ background: 'linear-gradient(180deg, rgba(204,255,0,0.5) 0%, transparent 100%)' }} />
+      <div aria-hidden className="absolute top-0 right-0 w-48 h-px" style={{ background: 'linear-gradient(270deg, rgba(0,212,255,0.4) 0%, transparent 100%)' }} />
+      <div aria-hidden className="absolute top-0 right-0 w-px h-48" style={{ background: 'linear-gradient(180deg, rgba(0,212,255,0.4) 0%, transparent 100%)' }} />
+
+      {/* PulseBeams — decorative bottom */}
+      <div className="absolute bottom-0 left-1/2 -translate-x-1/2 w-full max-w-2xl opacity-60 pointer-events-none">
+        <PulseBeams
+          beams={HERO_BEAMS}
+          width={660}
+          height={420}
+          baseColor="rgba(255,255,255,0.05)"
+          accentColor="rgba(255,255,255,0.12)"
+          gradientColors={{ start: '#00D4FF', middle: '#9D6FFF', end: '#CCFF00' }}
+        />
+      </div>
+
+      {/* ── MAIN CONTENT ── */}
+      <div className="relative z-20 max-w-5xl mx-auto px-6 py-20 flex flex-col items-center text-center">
+
+        {/* Live badge */}
         <motion.div
-          initial={{ opacity: 0, y: 16 }}
-          whileInView={{ opacity: 1, y: 0 }}
-          viewport={{ once: true }}
+          initial={{ opacity: 0, y: -14 }}
+          animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.5 }}
+          className="inline-flex items-center gap-2.5 mb-10"
+          style={{
+            background: 'rgba(204,255,0,0.06)',
+            border: '1px solid rgba(204,255,0,0.22)',
+            borderRadius: 2,
+            padding: '6px 16px',
+          }}
         >
-          <span style={{ fontFamily: 'var(--font-data)', fontSize: 9, fontWeight: 700, letterSpacing: '0.22em', textTransform: 'uppercase', color: 'var(--accent-cyan)', display: 'block', marginBottom: 14 }}>
-            Platform Preview
+          <span
+            style={{
+              width: 6, height: 6, borderRadius: '50%', background: '#CCFF00',
+              boxShadow: '0 0 8px #CCFF00',
+              animation: 'dataPulse 2s ease-in-out infinite',
+              display: 'block',
+            }}
+          />
+          <span style={{ fontFamily: 'var(--font-data)', fontSize: 10, letterSpacing: '0.20em', color: '#CCFF00' }}>
+            LIVE — APEX DECISION ENGINE v2.0
           </span>
-          <h2 className="font-display font-black tracking-tighter" style={{ fontSize: 'clamp(2.2rem,4.5vw,4rem)', color: '#fff', lineHeight: 0.95, marginBottom: 16 }}>
-            The terminal, on your screen.<br />
-            <span style={{ color: 'var(--accent-primary)' }}>Every signal, one view.</span>
-          </h2>
-          <p style={{ fontFamily: 'var(--font-body)', fontSize: 15, color: 'rgba(255,255,255,0.42)', maxWidth: 480, margin: '0 auto', lineHeight: 1.65 }}>
-            Five intelligence layers rendered into a single, decisive interface. Nothing to interpret — just act.
-          </p>
+        </motion.div>
+
+        {/* Headline */}
+        <motion.h1
+          initial={{ opacity: 0, y: 28 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.75, delay: 0.1, ease: [0.16, 1, 0.3, 1] }}
+          className="font-display font-black"
+          style={{
+            fontSize: 'clamp(3.4rem, 9vw, 9.5rem)',
+            lineHeight: 0.88,
+            letterSpacing: '-0.03em',
+            marginBottom: '1.4rem',
+          }}
+        >
+          <span style={{ display: 'block', color: '#fff' }}>FIVE LAYERS</span>
+          <span style={{ display: 'block', color: 'rgba(255,255,255,0.18)', WebkitTextStroke: '1px rgba(255,255,255,0.22)' }}>
+            OF MARKET
+          </span>
+          <span
+            style={{
+              display: 'block',
+              background: 'linear-gradient(135deg, #CCFF00 0%, #00D4FF 55%, #9D6FFF 100%)',
+              WebkitBackgroundClip: 'text',
+              WebkitTextFillColor: 'transparent',
+            }}
+          >
+            INTELLIGENCE.
+          </span>
+        </motion.h1>
+
+        {/* Subheading */}
+        <motion.p
+          initial={{ opacity: 0, y: 16 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.6, delay: 0.28, ease: [0.16, 1, 0.3, 1] }}
+          style={{
+            fontFamily: 'var(--font-data)',
+            fontSize: 'clamp(0.8rem, 1.4vw, 1rem)',
+            color: 'rgba(255,255,255,0.42)',
+            letterSpacing: '0.09em',
+            maxWidth: 540,
+            lineHeight: 1.8,
+            marginBottom: '2.8rem',
+          }}
+        >
+          Technical indicators · Options flow · Volume analysis<br />
+          Sentiment · AI synthesis — one decisive signal.
+        </motion.p>
+
+        {/* CTA row */}
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.5, delay: 0.44 }}
+          className="flex flex-col sm:flex-row gap-4 items-center"
+        >
+          <Link
+            to="/signup"
+            className="group relative flex items-center gap-2.5 cursor-pointer"
+            style={{
+              background: '#CCFF00',
+              color: '#000',
+              borderRadius: 2,
+              padding: '14px 32px',
+              fontFamily: 'var(--font-display)',
+              fontWeight: 800,
+              fontSize: 12,
+              letterSpacing: '0.12em',
+              transition: 'box-shadow 0.2s, transform 0.15s',
+              boxShadow: '0 0 0 rgba(204,255,0,0)',
+            }}
+            onMouseEnter={e => {
+              e.currentTarget.style.boxShadow = '0 0 32px rgba(204,255,0,0.45)'
+              e.currentTarget.style.transform = 'translateY(-1px)'
+            }}
+            onMouseLeave={e => {
+              e.currentTarget.style.boxShadow = '0 0 0 rgba(204,255,0,0)'
+              e.currentTarget.style.transform = 'translateY(0)'
+            }}
+          >
+            START FREE
+            <ArrowRight size={14} />
+          </Link>
+
+          <Link
+            to="/dashboard"
+            className="group flex items-center gap-2.5 cursor-pointer"
+            style={{
+              background: 'rgba(255,255,255,0.04)',
+              color: 'rgba(255,255,255,0.65)',
+              border: '1px solid rgba(255,255,255,0.12)',
+              borderRadius: 2,
+              padding: '13px 28px',
+              fontFamily: 'var(--font-display)',
+              fontWeight: 700,
+              fontSize: 12,
+              letterSpacing: '0.12em',
+              transition: 'all 0.2s',
+              backdropFilter: 'blur(8px)',
+            }}
+            onMouseEnter={e => {
+              e.currentTarget.style.borderColor = 'rgba(0,212,255,0.35)'
+              e.currentTarget.style.color = '#00D4FF'
+              e.currentTarget.style.background = 'rgba(0,212,255,0.06)'
+            }}
+            onMouseLeave={e => {
+              e.currentTarget.style.borderColor = 'rgba(255,255,255,0.12)'
+              e.currentTarget.style.color = 'rgba(255,255,255,0.65)'
+              e.currentTarget.style.background = 'rgba(255,255,255,0.04)'
+            }}
+          >
+            <Terminal size={13} />
+            LIVE DEMO
+          </Link>
+        </motion.div>
+
+        {/* Stats row */}
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ duration: 1, delay: 0.9 }}
+          className="flex items-center gap-10 mt-20 flex-wrap justify-center"
+          style={{ borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: 28 }}
+        >
+          {[
+            { value: '85.2', suffix: '%', label: 'SIGNAL ACCURACY', color: '#CCFF00' },
+            { value: '47',   suffix: 'K',  label: 'SIGNALS LOGGED',  color: '#00D4FF' },
+            { value: '5',    suffix: '',   label: 'INTEL LAYERS',    color: '#9D6FFF' },
+          ].map(s => (
+            <div key={s.label} className="flex flex-col items-center gap-1.5">
+              <span
+                className="font-display font-black"
+                style={{ fontSize: '2.2rem', lineHeight: 1, color: s.color, textShadow: `0 0 24px ${s.color}66` }}
+              >
+                {s.value}{s.suffix}
+              </span>
+              <span style={{ fontFamily: 'var(--font-data)', fontSize: 9, color: 'rgba(255,255,255,0.28)', letterSpacing: '0.18em' }}>
+                {s.label}
+              </span>
+            </div>
+          ))}
         </motion.div>
       </div>
 
-      {/* 3-D browser frame */}
+      {/* Scroll caret */}
       <motion.div
-        style={{ perspective: '1200px', opacity, y }}
-        className="max-w-[1100px] mx-auto px-6"
+        className="absolute bottom-8 left-1/2 -translate-x-1/2 flex flex-col items-center gap-2"
+        initial={{ opacity: 0 }}
+        animate={{ opacity: [0, 0.45, 0.45], y: [0, 0, 7, 0] }}
+        transition={{ opacity: { delay: 2, duration: 1 }, y: { duration: 2.2, repeat: Infinity, ease: 'easeInOut', delay: 2 } }}
       >
-        <motion.div
-          style={{
-            rotateX: springRotX,
-            scale: springScale,
-            transformOrigin: 'center top',
-            transformStyle: 'preserve-3d',
-          }}
-        >
-          {/* glow under frame */}
-          <motion.div
-            style={{ opacity: glowOp }}
-            className="absolute -bottom-12 left-1/2 -translate-x-1/2 w-3/4 h-24 pointer-events-none"
-            aria-hidden
-          >
-            <div style={{ width: '100%', height: '100%', background: 'radial-gradient(ellipse, rgba(204,255,0,0.18) 0%, transparent 70%)', filter: 'blur(24px)' }} />
-          </motion.div>
-
-          {/* chrome bar */}
-          <div style={{ background: '#0D1117', border: '1px solid rgba(255,255,255,0.10)', borderBottom: 'none', borderRadius: '8px 8px 0 0', padding: '0 14px', height: 42, display: 'flex', alignItems: 'center', gap: 10 }}>
-            <div className="flex gap-1.5">
-              {['#FF5F57','#FEBC2E','#28C840'].map(c => (
-                <div key={c} style={{ width: 10, height: 10, borderRadius: '50%', background: c, opacity: 0.85 }} />
-              ))}
-            </div>
-            <div style={{ flex: 1, marginLeft: 8, maxWidth: 340, background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 4, height: 24, display: 'flex', alignItems: 'center', paddingLeft: 10, gap: 6 }}>
-              <Lock size={9} style={{ color: 'rgba(255,255,255,0.25)', flexShrink: 0 }} />
-              <span style={{ fontFamily: 'var(--font-data)', fontSize: 10, color: 'rgba(255,255,255,0.30)', letterSpacing: '0.03em' }}>app.apexengine.io/dashboard</span>
-            </div>
-            <div className="ml-auto flex items-center gap-2">
-              <Circle size={6} fill="var(--color-profit)" style={{ color: 'var(--color-profit)' }} className="animate-pulse" />
-              <span style={{ fontFamily: 'var(--font-data)', fontSize: 8, color: 'rgba(255,255,255,0.25)', letterSpacing: '0.12em' }}>LIVE</span>
-            </div>
-          </div>
-
-          {/* mock dashboard content */}
-          <div style={{ background: '#07090F', border: '1px solid rgba(255,255,255,0.10)', borderTop: 'none', borderRadius: '0 0 8px 8px', overflow: 'hidden', minHeight: 420 }}>
-            {/* dashboard nav bar */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 24, padding: '10px 20px', borderBottom: '1px solid rgba(255,255,255,0.05)', background: '#07090F' }}>
-              <span style={{ fontFamily: 'var(--font-display)', fontSize: 13, fontWeight: 900, color: 'var(--accent-primary)', letterSpacing: '0.12em' }}>APEX</span>
-              {['Signal Hub','Charts','Track Record','AI Chat'].map(n => (
-                <span key={n} style={{ fontFamily: 'var(--font-data)', fontSize: 9, color: n === 'Signal Hub' ? '#fff' : 'rgba(255,255,255,0.30)', letterSpacing: '0.10em', textTransform: 'uppercase', borderBottom: n === 'Signal Hub' ? '1px solid var(--accent-primary)' : 'none', paddingBottom: 2 }}>
-                  {n}
-                </span>
-              ))}
-              <div className="ml-auto flex items-center gap-2" style={{ fontFamily: 'var(--font-data)', fontSize: 8, color: 'var(--color-profit)', border: '1px solid rgba(0,232,121,0.22)', padding: '3px 8px' }}>
-                <span className="animate-pulse inline-block w-1.5 h-1.5 rounded-full bg-current" /> MARKET OPEN
-              </div>
-            </div>
-
-            {/* signal cards grid */}
-            <div style={{ padding: '16px 20px', display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 12 }}>
-              {[
-                { sym: 'NVDA', price: '$875.20', chg: '+3.4%', verdict: 'STRONG BUY', conf: 84, color: '#00E879', tags: ['UOA ↑','RSI 62','Vol 2.8×'] },
-                { sym: 'META', price: '$492.10', chg: '+1.7%', verdict: 'BUY',        conf: 71, color: '#52F7A2', tags: ['Breakout','Sent ↑'] },
-                { sym: 'AAPL', price: '$189.44', chg: '-0.3%', verdict: 'WATCH',      conf: 51, color: '#FFB800', tags: ['Consolidating'] },
-              ].map(({ sym, price, chg, verdict, conf, color, tags }) => (
-                <div key={sym} style={{ background: 'rgba(0,0,0,0.45)', border: `1px solid rgba(255,255,255,0.06)`, borderLeft: `2px solid ${color}`, padding: '12px 14px' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
-                    <div>
-                      <div style={{ fontFamily: 'var(--font-display)', fontSize: 16, fontWeight: 900, color: '#fff', lineHeight: 1 }}>{sym}</div>
-                      <div style={{ fontFamily: 'var(--font-data)', fontSize: 9, color: 'rgba(255,255,255,0.35)', marginTop: 2 }}>{price}</div>
-                    </div>
-                    <div style={{ textAlign: 'right' }}>
-                      <div style={{ fontFamily: 'var(--font-display)', fontSize: 14, fontWeight: 900, color }}>{conf}%</div>
-                      <div style={{ fontFamily: 'var(--font-data)', fontSize: 7, color, border: `1px solid ${color}33`, padding: '1px 5px', marginTop: 3, textTransform: 'uppercase', letterSpacing: '0.12em' }}>{verdict}</div>
-                    </div>
-                  </div>
-                  <div style={{ height: 2, background: 'rgba(255,255,255,0.06)', marginBottom: 8 }}>
-                    <div style={{ height: '100%', width: `${conf}%`, background: `linear-gradient(90deg, ${color}55, ${color})` }} />
-                  </div>
-                  <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-                    {tags.map(t => (
-                      <span key={t} style={{ fontFamily: 'var(--font-data)', fontSize: 7, color: 'rgba(255,255,255,0.30)', background: 'rgba(255,255,255,0.04)', padding: '2px 6px', letterSpacing: '0.08em' }}>{t}</span>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            {/* bottom strip */}
-            <div style={{ padding: '12px 20px', borderTop: '1px solid rgba(255,255,255,0.04)', display: 'flex', alignItems: 'center', gap: 16 }}>
-              {[
-                { label: 'Signals Today', val: '12', color: 'var(--accent-primary)' },
-                { label: 'Buy Bias',      val: '67%', color: 'var(--color-profit)'  },
-                { label: 'Regime',        val: 'BULL', color: 'var(--accent-cyan)'  },
-                { label: 'Avg Conf',      val: '74%', color: 'rgba(255,255,255,0.5)' },
-              ].map(({ label, val, color }) => (
-                <div key={label} style={{ textAlign: 'center' }}>
-                  <div style={{ fontFamily: 'var(--font-display)', fontSize: 14, fontWeight: 900, color, lineHeight: 1 }}>{val}</div>
-                  <div style={{ fontFamily: 'var(--font-data)', fontSize: 7, color: 'rgba(255,255,255,0.25)', marginTop: 3, letterSpacing: '0.10em', textTransform: 'uppercase' }}>{label}</div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </motion.div>
+        <span style={{ fontFamily: 'var(--font-data)', fontSize: 8, letterSpacing: '0.22em', color: 'rgba(255,255,255,0.28)' }}>
+          SCROLL
+        </span>
+        <div style={{ width: 1, height: 36, background: 'linear-gradient(180deg, rgba(204,255,0,0.5) 0%, transparent 100%)' }} />
       </motion.div>
     </section>
   )
 }
 
-// ─── Proof strip with animated counters ───────────────────────────────────────
-function ProofStrip() {
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 2 — PROOF STRIP
+// ─────────────────────────────────────────────────────────────────────────────
+const PROOF_STATS = [
+  { to: 85.2,  suffix: '%',  label: 'Signal Accuracy',    decimal: true,  color: '#CCFF00' },
+  { to: 47000, suffix: '+',  label: 'Signals Generated',  decimal: false, color: '#00D4FF' },
+  { to: 5,     suffix: '',   label: 'Intelligence Layers', decimal: false, color: '#9D6FFF' },
+  { to: 99.8,  suffix: '%',  label: 'Platform Uptime',    decimal: true,  color: '#00E879' },
+  { to: 3,     suffix: 's',  label: 'Avg Response Time',  decimal: false, color: '#FFB800' },
+]
+
+function StatsStrip() {
   return (
-    <motion.section
-      initial={{ opacity: 0 }}
-      whileInView={{ opacity: 1 }}
-      viewport={{ once: true }}
-      transition={{ duration: 0.5 }}
-      className="relative border-b overflow-hidden"
-      style={{ borderColor: 'rgba(255,255,255,0.06)', background: 'rgba(7,9,15,0.80)' }}
+    <section
+      style={{
+        background: 'var(--bg-deep)',
+        borderTop: '1px solid rgba(255,255,255,0.06)',
+        borderBottom: '1px solid rgba(255,255,255,0.06)',
+      }}
     >
-      <div className="py-6 px-6 max-w-[1440px] mx-auto">
-        <div className="flex flex-wrap items-center justify-around gap-8">
-          {[
-            { label: 'Signal Layers',  to: 5,    suffix: '',    color: 'var(--accent-primary)'    },
-            { label: 'Backtest Acc',   to: 84,   suffix: '%',   color: 'var(--color-profit)'      },
-            { label: 'Asset Classes',  to: 3,    suffix: '',    color: 'var(--accent-cyan)'       },
-            { label: 'Verdict Window', to: 1.5,  suffix: '–3d', color: 'rgba(255,255,255,0.65)'  },
-            { label: 'Signals Logged', to: 2400, suffix: '+',   color: 'var(--accent-violet)'    },
-          ].map(({ label, to, suffix, color }) => (
-            <div key={label} className="text-center">
-              <div className="flex items-baseline gap-0.5 justify-center" style={{ fontFamily: 'var(--font-display)', fontSize: 'clamp(1.6rem,3vw,2.4rem)', fontWeight: 900, color, lineHeight: 1 }}>
-                <Counter to={to} suffix={suffix} />
-              </div>
-              <p style={{ fontFamily: 'var(--font-data)', fontSize: 8, letterSpacing: '0.16em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.28)', marginTop: 5 }}>
-                {label}
-              </p>
-            </div>
+      <div className="max-w-7xl mx-auto px-6 py-14">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-8 md:gap-4">
+          {PROOF_STATS.map((s, i) => (
+            <motion.div
+              key={s.label}
+              initial={{ opacity: 0, y: 20 }}
+              whileInView={{ opacity: 1, y: 0 }}
+              viewport={{ once: true }}
+              transition={{ duration: 0.5, delay: i * 0.08 }}
+              className="flex flex-col items-center gap-2 text-center relative"
+            >
+              {i < PROOF_STATS.length - 1 && (
+                <div
+                  className="absolute right-0 top-1/2 -translate-y-1/2 hidden md:block"
+                  style={{ width: 1, height: 36, background: 'rgba(255,255,255,0.06)' }}
+                />
+              )}
+              <span
+                className="font-display font-black"
+                style={{ fontSize: '2.8rem', lineHeight: 1, color: s.color, textShadow: `0 0 20px ${s.color}44` }}
+              >
+                <Counter to={s.to} suffix={s.suffix} decimal={s.decimal} />
+              </span>
+              <span style={{ fontFamily: 'var(--font-data)', fontSize: 10, color: 'rgba(255,255,255,0.35)', letterSpacing: '0.16em' }}>
+                {s.label.toUpperCase()}
+              </span>
+            </motion.div>
           ))}
         </div>
       </div>
-    </motion.section>
-  )
-}
-
-// ─── Sticky signal pipeline ────────────────────────────────────────────────────
-const PIPELINE_LAYERS = [
-  {
-    num: '01',
-    label: 'Technical Indicators',
-    detail: 'RSI, MACD, Bollinger Bands, EMA cross, relative volume. Classic signals — computed fresh every session.',
-    color: 'var(--accent-cyan)',
-    icon: BarChart3,
-    stat: { val: '12+', label: 'Indicators' },
-  },
-  {
-    num: '02',
-    label: 'Options Flow (UOA)',
-    detail: 'Unusual options activity scanner flags institutional-size positioning before the underlying moves. Directional and magnitude scored.',
-    color: '#9D6FFF',
-    icon: Activity,
-    stat: { val: 'Real-time', label: 'Flow data' },
-  },
-  {
-    num: '03',
-    label: 'Volume Analysis',
-    detail: 'Relative volume vs 20-day average. Price-volume divergence detection. Breakout volume confirmation.',
-    color: 'var(--accent-primary)',
-    icon: TrendingUp,
-    stat: { val: '20d', label: 'Baseline' },
-  },
-  {
-    num: '04',
-    label: 'News Sentiment',
-    detail: 'Headline scoring, earnings event detection, macro catalyst flagging. Weighted by recency and source credibility.',
-    color: '#FFB800',
-    icon: Globe,
-    stat: { val: 'Live', label: 'Headlines' },
-  },
-  {
-    num: '05',
-    label: 'AI Synthesis',
-    detail: 'All four layers fused by a stack of AI models into a directional verdict with confidence score, bull case, bear case, and full reasoning chain.',
-    color: 'var(--color-profit)',
-    icon: Brain,
-    stat: { val: '1 verdict', label: 'Per signal' },
-  },
-]
-
-function StickyPipeline() {
-  const containerRef = useRef(null)
-  const { scrollYProgress } = useScroll({ target: containerRef, offset: ['start start', 'end end'] })
-  const [active, setActive] = useState(0)
-
-  useEffect(() => {
-    return scrollYProgress.on('change', v => {
-      setActive(Math.min(Math.floor(v * PIPELINE_LAYERS.length), PIPELINE_LAYERS.length - 1))
-    })
-  }, [scrollYProgress])
-
-  const layer = PIPELINE_LAYERS[active]
-
-  return (
-    <section ref={containerRef} style={{ height: `${PIPELINE_LAYERS.length * 100}vh` }} className="relative">
-      <div className="sticky top-0 h-screen flex items-center overflow-hidden" style={{ background: 'var(--bg-deep)' }}>
-        {/* Background grid */}
-        <div className="absolute inset-0 terminal-grid opacity-20 pointer-events-none" />
-
-        <div className="max-w-[1440px] mx-auto px-6 w-full grid lg:grid-cols-2 gap-16 items-center">
-          {/* Left: text panel */}
-          <div>
-            <motion.div
-              initial={{ opacity: 0, y: 12 }}
-              whileInView={{ opacity: 1, y: 0 }}
-              viewport={{ once: true }}
-              transition={{ duration: 0.5 }}
-              className="mb-12"
-            >
-              <span style={{ fontFamily: 'var(--font-data)', fontSize: 9, fontWeight: 700, letterSpacing: '0.22em', textTransform: 'uppercase', color: 'var(--accent-cyan)', display: 'block', marginBottom: 14 }}>
-                Signal Architecture
-              </span>
-              <h2 className="font-display font-black tracking-tighter leading-none" style={{ fontSize: 'clamp(2.4rem,4.5vw,4rem)', color: '#fff' }}>
-                Five layers.<br />
-                <span style={{ color: 'var(--accent-primary)' }}>One verdict.</span>
-              </h2>
-            </motion.div>
-
-            {/* Layer tabs */}
-            <div className="space-y-1.5">
-              {PIPELINE_LAYERS.map((l, i) => {
-                const Icon = l.icon
-                const isActive = i === active
-                return (
-                  <motion.div
-                    key={l.label}
-                    animate={{
-                      background: isActive ? `${l.color}0D` : 'rgba(0,0,0,0)',
-                      borderColor: isActive ? `${l.color}44` : 'rgba(255,255,255,0.05)',
-                    }}
-                    transition={{ duration: 0.25 }}
-                    style={{ border: '1px solid', borderLeft: `3px solid ${isActive ? l.color : 'transparent'}`, padding: '10px 14px', cursor: 'default' }}
-                    className="flex items-center gap-4"
-                  >
-                    <div style={{ width: 30, height: 30, border: `1px solid ${l.color}33`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, background: isActive ? `${l.color}10` : 'transparent' }}>
-                      <Icon size={13} style={{ color: isActive ? l.color : 'rgba(255,255,255,0.35)' }} />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div style={{ fontFamily: 'var(--font-data)', fontSize: 9, fontWeight: 700, letterSpacing: '0.10em', textTransform: 'uppercase', color: isActive ? '#fff' : 'rgba(255,255,255,0.40)' }}>
-                        <span style={{ color: isActive ? l.color : 'rgba(255,255,255,0.18)', marginRight: 8 }}>{l.num}</span>
-                        {l.label}
-                      </div>
-                    </div>
-                    {isActive && (
-                      <div style={{ fontFamily: 'var(--font-display)', fontSize: 13, fontWeight: 900, color: l.color, flexShrink: 0 }}>
-                        {l.stat.val}
-                      </div>
-                    )}
-                  </motion.div>
-                )
-              })}
-            </div>
-
-            {/* Progress indicator */}
-            <div className="mt-6 flex items-center gap-1.5">
-              {PIPELINE_LAYERS.map((_, i) => (
-                <div key={i} style={{ height: 2, flex: 1, background: i <= active ? layer.color : 'rgba(255,255,255,0.08)', transition: 'background 0.3s' }} />
-              ))}
-            </div>
-          </div>
-
-          {/* Right: detail card */}
-          <div className="hidden lg:block">
-            <motion.div
-              key={active}
-              initial={{ opacity: 0, x: 24 }}
-              animate={{ opacity: 1, x: 0 }}
-              transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
-              style={{ background: 'rgba(7,9,15,0.90)', border: `1px solid ${layer.color}28`, borderLeft: `3px solid ${layer.color}`, padding: '32px 36px' }}
-            >
-              <div className="flex items-center gap-3 mb-6">
-                <div style={{ width: 40, height: 40, border: `1px solid ${layer.color}44`, display: 'flex', alignItems: 'center', justifyContent: 'center', background: `${layer.color}0D` }}>
-                  {(() => { const Icon = layer.icon; return <Icon size={18} style={{ color: layer.color }} /> })()}
-                </div>
-                <div>
-                  <div style={{ fontFamily: 'var(--font-data)', fontSize: 8, color: layer.color, letterSpacing: '0.20em', textTransform: 'uppercase', fontWeight: 700 }}>Layer {layer.num}</div>
-                  <div style={{ fontFamily: 'var(--font-display)', fontSize: 18, fontWeight: 900, color: '#fff', lineHeight: 1.1, marginTop: 2 }}>{layer.label}</div>
-                </div>
-              </div>
-
-              <p style={{ fontFamily: 'var(--font-body)', fontSize: 14, color: 'rgba(255,255,255,0.58)', lineHeight: 1.7, marginBottom: 24 }}>
-                {layer.detail}
-              </p>
-
-              <div style={{ display: 'flex', gap: 16 }}>
-                <div style={{ padding: '14px 20px', background: `${layer.color}08`, border: `1px solid ${layer.color}22`, textAlign: 'center' }}>
-                  <div style={{ fontFamily: 'var(--font-display)', fontSize: 22, fontWeight: 900, color: layer.color, lineHeight: 1 }}>{layer.stat.val}</div>
-                  <div style={{ fontFamily: 'var(--font-data)', fontSize: 8, color: 'rgba(255,255,255,0.28)', marginTop: 4, letterSpacing: '0.12em', textTransform: 'uppercase' }}>{layer.stat.label}</div>
-                </div>
-                {active === PIPELINE_LAYERS.length - 1 && (
-                  <div style={{ padding: '14px 20px', background: 'rgba(0,232,121,0.06)', border: '1px solid rgba(0,232,121,0.22)', flex: 1 }}>
-                    <div style={{ fontFamily: 'var(--font-data)', fontSize: 8, fontWeight: 700, letterSpacing: '0.16em', textTransform: 'uppercase', color: 'var(--color-profit)', marginBottom: 6 }}>Output verdict</div>
-                    <div style={{ fontFamily: 'var(--font-data)', fontSize: 10, color: 'rgba(255,255,255,0.65)', fontWeight: 600 }}>STRONG BUY · BUY · WATCH · AVOID · STRONG AVOID</div>
-                  </div>
-                )}
-              </div>
-
-              {/* scan line decoration */}
-              <div style={{ marginTop: 24, height: 1, background: `linear-gradient(90deg, ${layer.color}55, transparent)`, opacity: 0.5 }} />
-            </motion.div>
-          </div>
-        </div>
-
-        {/* Scroll hint */}
-        <div className="absolute bottom-8 left-1/2 -translate-x-1/2 flex flex-col items-center gap-2" style={{ opacity: active === 0 ? 0.5 : 0, transition: 'opacity 0.4s' }}>
-          <span style={{ fontFamily: 'var(--font-data)', fontSize: 7, color: 'rgba(255,255,255,0.28)', letterSpacing: '0.18em', textTransform: 'uppercase' }}>Scroll to explore</span>
-          <motion.div animate={{ y: [0, 5, 0] }} transition={{ repeat: Infinity, duration: 1.5 }}>
-            <ChevronRight size={12} style={{ color: 'rgba(255,255,255,0.25)', transform: 'rotate(90deg)' }} />
-          </motion.div>
-        </div>
-      </div>
     </section>
   )
 }
 
-// ─── Bento features grid ───────────────────────────────────────────────────────
-const FEATURES = [
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 3 — INTELLIGENCE LAYERS
+// ─────────────────────────────────────────────────────────────────────────────
+const LAYERS = [
   {
-    icon: Brain,
-    color: 'var(--accent-violet)',
-    title: 'AI Signal Engine',
-    desc: 'Five layers of analysis fused by a stack of AI models into one structured verdict. Confidence-scored with full reasoning.',
-    span: 'lg:col-span-2',
-    accent: true,
+    id: '01', label: 'Technical Analysis',
+    icon: BarChart3, color: '#00D4FF',
+    desc: 'RSI, MACD, Bollinger Bands, EMA crossovers, volume divergence — 40+ indicators.',
   },
   {
-    icon: Activity,
-    color: 'var(--accent-cyan)',
-    title: 'Options Flow (UOA)',
-    desc: 'Unusual options activity detection flags institutional positioning before the move.',
-    span: 'lg:col-span-1',
+    id: '02', label: 'Options Flow / UOA',
+    icon: Activity, color: '#9D6FFF',
+    desc: 'Unusual options activity detection. Dark pool prints. Sweep orders flagged in real time.',
   },
   {
-    icon: BarChart3,
-    color: 'var(--accent-primary)',
-    title: 'Professional Charts',
-    desc: 'TradingView-grade charting with signal overlays. Watch price move against your signal conviction.',
-    span: 'lg:col-span-1',
+    id: '03', label: 'Volume Analysis',
+    icon: TrendingUp, color: '#CCFF00',
+    desc: 'VWAP deviation, accumulation/distribution, institutional block detection.',
   },
   {
-    icon: TrendingUp,
-    color: 'var(--color-profit)',
-    title: 'Track Record',
-    desc: 'Every signal logged. Accuracy tracked publicly. No cherry-picking — when ADE is wrong, you see it.',
-    span: 'lg:col-span-1',
+    id: '04', label: 'News Sentiment',
+    icon: Newspaper, color: '#FFB800',
+    desc: 'Real-time NLP scoring across 2000+ sources. Earnings, macro events, SEC filings.',
   },
   {
-    icon: Shield,
-    color: 'var(--color-warning)',
-    title: 'Regime Detection',
-    desc: 'Market regime (BULL / BEAR / HIGH_VOL) factored into every signal. Conflicts flagged explicitly.',
-    span: 'lg:col-span-1',
-  },
-  {
-    icon: Zap,
-    color: 'var(--accent-primary)',
-    title: 'Morning Brief Agent',
-    desc: 'Automated pre-market digest delivered before the open. APEX tier only.',
-    span: 'lg:col-span-2',
+    id: '05', label: 'AI Synthesis',
+    icon: Brain, color: '#00E879',
+    desc: 'Claude AI fuses all four layers into one verdict: STRONG BUY → STRONG AVOID.',
   },
 ]
 
-function BentoGrid() {
+// SVG paths: each outer node → center (430, 265)
+const INTEL_BEAMS = [
+  // TL → center
+  {
+    path: 'M95,140 C260,140 310,265 430,265',
+    gradientConfig: {
+      initial: { x1:'0%', x2:'50%', y1:'0%', y2:'100%' },
+      animate: { x1:['0%','100%','100%'], x2:['50%','150%','150%'], y1:['0%','0%','100%'], y2:['100%','100%','200%'] },
+      transition: { duration: 2.2, repeat: Infinity, ease: 'linear', delay: 0 },
+    },
+    connectionPoints: [{ cx: 95, cy: 140, r: 6 }, { cx: 430, cy: 265, r: 10 }],
+  },
+  // TR → center
+  {
+    path: 'M765,140 C600,140 550,265 430,265',
+    gradientConfig: {
+      initial: { x1:'100%', x2:'50%', y1:'0%', y2:'100%' },
+      animate: { x1:['100%','0%','0%'], x2:['50%','-50%','-50%'], y1:['0%','0%','100%'], y2:['100%','100%','200%'] },
+      transition: { duration: 2.2, repeat: Infinity, ease: 'linear', delay: 0.5 },
+    },
+    connectionPoints: [{ cx: 765, cy: 140, r: 6 }, { cx: 430, cy: 265, r: 10 }],
+  },
+  // BL → center
+  {
+    path: 'M95,390 C260,390 310,265 430,265',
+    gradientConfig: {
+      initial: { x1:'0%', x2:'50%', y1:'100%', y2:'0%' },
+      animate: { x1:['0%','100%','100%'], x2:['50%','150%','150%'], y1:['100%','100%','0%'], y2:['0%','0%','-100%'] },
+      transition: { duration: 2.2, repeat: Infinity, ease: 'linear', delay: 1.0 },
+    },
+    connectionPoints: [{ cx: 95, cy: 390, r: 6 }, { cx: 430, cy: 265, r: 10 }],
+  },
+  // BR → center
+  {
+    path: 'M765,390 C600,390 550,265 430,265',
+    gradientConfig: {
+      initial: { x1:'100%', x2:'50%', y1:'100%', y2:'0%' },
+      animate: { x1:['100%','0%','0%'], x2:['50%','-50%','-50%'], y1:['100%','100%','0%'], y2:['0%','0%','-100%'] },
+      transition: { duration: 2.2, repeat: Infinity, ease: 'linear', delay: 1.5 },
+    },
+    connectionPoints: [{ cx: 765, cy: 390, r: 6 }, { cx: 430, cy: 265, r: 10 }],
+  },
+  // Top → center
+  {
+    path: 'M430,50 L430,265',
+    gradientConfig: {
+      initial: { x1:'50%', x2:'50%', y1:'0%', y2:'100%' },
+      animate: { x1:'50%', x2:'50%', y1:['0%','100%','200%'], y2:['100%','200%','300%'] },
+      transition: { duration: 2.0, repeat: Infinity, ease: 'linear', delay: 2.0 },
+    },
+    connectionPoints: [{ cx: 430, cy: 50, r: 6 }, { cx: 430, cy: 265, r: 10 }],
+  },
+]
+
+function IntelligenceSection() {
   return (
-    <section className="border-t" style={{ borderColor: 'rgba(255,255,255,0.06)', background: 'var(--bg-void)' }}>
-      <div className="max-w-[1440px] mx-auto px-6 py-24">
-        <motion.div
-          initial={{ opacity: 0, y: 12 }}
-          whileInView={{ opacity: 1, y: 0 }}
-          viewport={{ once: true }}
-          transition={{ duration: 0.45 }}
-          className="mb-14"
-        >
-          <span style={{ fontFamily: 'var(--font-data)', fontSize: 9, fontWeight: 700, letterSpacing: '0.22em', textTransform: 'uppercase', color: 'var(--accent-primary)', display: 'block', marginBottom: 14 }}>
-            Capabilities
-          </span>
-          <h2 className="font-display font-black tracking-tighter" style={{ fontSize: 'clamp(2rem,4vw,3.5rem)', color: '#fff' }}>
-            Everything you need.<br />
-            <span style={{ color: 'rgba(255,255,255,0.25)' }}>Nothing you don't.</span>
-          </h2>
-        </motion.div>
-
-        <div className="grid lg:grid-cols-4 gap-3">
-          {FEATURES.map((feat, i) => {
-            const Icon = feat.icon
-            return (
-              <motion.div
-                key={feat.title}
-                className={`${feat.span || ''} group relative overflow-hidden`}
-                initial={{ opacity: 0, y: 20 }}
-                whileInView={{ opacity: 1, y: 0 }}
-                viewport={{ once: true, margin: '-40px' }}
-                transition={{ duration: 0.4, delay: (i % 4) * 0.07, ease: [0.16, 1, 0.3, 1] }}
-                whileHover={{ scale: 0.985, rotate: i % 2 === 0 ? '-0.4deg' : '0.4deg' }}
-                style={{
-                  background: feat.accent ? `linear-gradient(135deg, ${feat.color}08 0%, rgba(7,9,15,0.95) 60%)` : 'rgba(7,9,15,0.90)',
-                  border: `1px solid ${feat.accent ? `${feat.color}25` : 'rgba(255,255,255,0.06)'}`,
-                  padding: '28px 30px',
-                  cursor: 'default',
-                  transformOrigin: 'center center',
-                  transition: 'transform 0.3s cubic-bezier(0.16,1,0.3,1)',
-                }}
-              >
-                {/* hover glow */}
-                <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-500 pointer-events-none"
-                  style={{ background: `radial-gradient(ellipse 60% 60% at 50% 0%, ${feat.color}08 0%, transparent 70%)` }} />
-
-                <div className="relative z-10">
-                  <div className="mb-5 w-10 h-10 flex items-center justify-center"
-                    style={{ background: `${feat.color}12`, border: `1px solid ${feat.color}28` }}>
-                    <Icon size={17} style={{ color: feat.color }} />
-                  </div>
-                  <h3 style={{ fontFamily: 'var(--font-display)', fontSize: 15, fontWeight: 700, color: '#fff', letterSpacing: '-0.01em', marginBottom: 10 }}>
-                    {feat.title}
-                  </h3>
-                  <p style={{ fontFamily: 'var(--font-body)', fontSize: 13, color: 'rgba(255,255,255,0.42)', lineHeight: 1.65 }}>
-                    {feat.desc}
-                  </p>
-                </div>
-
-                {/* bottom accent */}
-                <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: 1, background: `linear-gradient(90deg, transparent, ${feat.color}33 50%, transparent)`, opacity: 0, transition: 'opacity 0.3s' }} className="group-hover:opacity-100" />
-              </motion.div>
-            )
-          })}
-        </div>
-      </div>
-    </section>
-  )
-}
-
-// ─── Pricing ──────────────────────────────────────────────────────────────────
-function TierCard({ name, price, color, features, cta, delay = 0 }) {
-  const isApex = name === 'APEX'
-  return (
-    <motion.div
-      initial={{ opacity: 0, y: 16 }}
-      whileInView={{ opacity: 1, y: 0 }}
-      viewport={{ once: true, margin: '-40px' }}
-      transition={{ duration: 0.4, delay, ease: [0.16, 1, 0.3, 1] }}
-      whileHover={{ y: -4 }}
-      style={{
-        background:  isApex ? `rgba(204,255,0,0.04)` : 'rgba(7,9,15,0.85)',
-        border:      `1px solid ${isApex ? 'rgba(204,255,0,0.22)' : 'rgba(255,255,255,0.07)'}`,
-        borderTop:   `2px solid ${color}`,
-        padding:     '26px',
-        position:    'relative',
-        transition:  'transform 0.3s cubic-bezier(0.16,1,0.3,1), box-shadow 0.3s ease',
-        cursor:      'default',
-      }}
+    <section
+      className="relative overflow-hidden py-28 md:py-40"
+      style={{ background: 'var(--bg-void)' }}
     >
-      {isApex && (
-        <div style={{
-          position: 'absolute', top: '-1px', right: '16px',
-          fontFamily: 'var(--font-data)', fontSize: 7, fontWeight: 700,
-          letterSpacing: '0.14em', textTransform: 'uppercase',
-          background: color, color: '#000', padding: '2px 8px',
-        }}>
-          Best Value
-        </div>
-      )}
-      <div className="mb-5">
-        <span style={{ fontFamily: 'var(--font-data)', fontSize: 9, fontWeight: 700, letterSpacing: '0.20em', textTransform: 'uppercase', color }}>{name}</span>
-        <div className="flex items-baseline gap-1 mt-1.5">
-          <span style={{ fontFamily: 'var(--font-display)', fontSize: 30, fontWeight: 900, color: '#fff' }}>{price}</span>
-          {price !== 'Free' && <span style={{ fontFamily: 'var(--font-data)', fontSize: 10, color: 'rgba(255,255,255,0.35)' }}>/mo</span>}
-        </div>
-      </div>
-      <div className="space-y-2.5 mb-6">
-        {features.map((f, i) => (
-          <div key={i} className="flex items-start gap-2.5">
-            <CheckCircle size={11} style={{ color, marginTop: '2px', flexShrink: 0 }} />
-            <span style={{ fontFamily: 'var(--font-body)', fontSize: 12.5, color: 'rgba(255,255,255,0.55)', lineHeight: 1.5 }}>{f}</span>
-          </div>
-        ))}
-      </div>
-      <Link
-        to="/signup"
-        className="block text-center py-3 transition-all hover:opacity-90"
+      {/* Background dot grid */}
+      <div
+        aria-hidden
+        className="absolute inset-0 pointer-events-none"
         style={{
-          fontFamily: 'var(--font-data)', fontSize: 9.5, fontWeight: 700,
-          letterSpacing: '0.14em', textTransform: 'uppercase',
-          background: isApex ? color : 'transparent',
-          color: isApex ? '#000' : color,
-          border: isApex ? 'none' : `1px solid ${color}55`,
+          backgroundImage: 'radial-gradient(circle, rgba(255,255,255,0.04) 1px, transparent 1px)',
+          backgroundSize: '40px 40px',
         }}
-      >
-        {cta}
-      </Link>
-    </motion.div>
-  )
-}
+      />
 
-// ─── Main Landing export ───────────────────────────────────────────────────────
-export default function Landing() {
-  return (
-    <PageWrapper className="bg-transparent pb-0">
-
-      {/* HERO */}
-      <HeroFuturistic />
-
-      {/* PROOF STRIP */}
-      <ProofStrip />
-
-      {/* MOCK BROWSER SHOWCASE */}
-      <MockBrowserShowcase />
-
-      {/* STICKY SIGNAL PIPELINE */}
-      <StickyPipeline />
-
-      {/* BENTO FEATURES */}
-      <BentoGrid />
-
-      {/* NOT FINANCIAL ADVICE BANNER */}
-      <section className="border-t border-b" style={{ borderColor: 'rgba(255,32,82,0.15)', background: 'rgba(255,32,82,0.03)' }}>
-        <div className="max-w-[1440px] mx-auto px-6 py-5 flex items-start gap-3">
-          <AlertTriangle size={14} style={{ color: 'var(--color-loss)', flexShrink: 0, marginTop: '1px' }} />
-          <p style={{ fontFamily: 'var(--font-body)', fontSize: 12, color: 'rgba(255,255,255,0.45)', lineHeight: 1.6, maxWidth: 800 }}>
-            <strong style={{ color: 'rgba(255,255,255,0.75)', fontWeight: 600 }}>ADE does not execute trades.</strong>{' '}
-            We analyze markets and output probability-weighted signals — you define your own execution on your own broker. No order routing. No custody. Pure analysis.
-          </p>
-        </div>
-      </section>
-
-      {/* PRICING */}
-      <section style={{ background: 'var(--bg-deep)' }}>
-        <div className="max-w-[1440px] mx-auto px-6 py-24">
-          <motion.div
-            initial={{ opacity: 0, y: 12 }}
-            whileInView={{ opacity: 1, y: 0 }}
+      <div className="max-w-7xl mx-auto px-6">
+        {/* Header */}
+        <div className="text-center mb-12">
+          <motion.span
+            initial={{ opacity: 0 }}
+            whileInView={{ opacity: 1 }}
             viewport={{ once: true }}
-            transition={{ duration: 0.45 }}
-            className="mb-14"
+            style={{ fontFamily: 'var(--font-data)', fontSize: 10, letterSpacing: '0.22em', color: '#CCFF00', display: 'block', marginBottom: 16 }}
           >
-            <span style={{ fontFamily: 'var(--font-data)', fontSize: 9, fontWeight: 700, letterSpacing: '0.22em', textTransform: 'uppercase', color: 'var(--accent-violet)', display: 'block', marginBottom: 14 }}>
-              Pricing
-            </span>
-            <h2 className="font-display font-black tracking-tighter" style={{ fontSize: 'clamp(2rem,4vw,3.2rem)', color: '#fff', marginBottom: 8 }}>
-              Four tiers. No fluff.
-            </h2>
-            <p style={{ fontFamily: 'var(--font-body)', fontSize: 15, color: 'rgba(255,255,255,0.40)' }}>
-              Start free. Upgrade when you need more signal depth.
-            </p>
-          </motion.div>
-
-          <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            <TierCard name="FREE"  price="Free"  color="rgba(255,255,255,0.35)" features={['Signal preview only','Verdict + confidence score','No reasoning or indicators','Public track record']}                                               cta="Get Started" delay={0.05} />
-            <TierCard name="EDGE"  price="$29"   color="rgba(255,255,255,0.55)" features={['Full signal reasoning','Bull/bear case breakdown','Key indicator data','Charts access','Up to 10 watchlist symbols']}                           cta="Start Edge"  delay={0.10} />
-            <TierCard name="ALPHA" price="$59"   color="var(--accent-cyan)"     features={['Everything in Edge','Up to 20 watchlist symbols','AI Chat — ask anything','Options flow detail','Priority signal refresh']}                      cta="Start Alpha" delay={0.15} />
-            <TierCard name="APEX"  price="$119"  color="var(--accent-primary)"  features={['Everything in Alpha','Automated morning brief agent','Unlimited watchlist','Earliest signal access','Custom regime alerts']}                     cta="Go Apex"     delay={0.20} />
-          </div>
-        </div>
-      </section>
-
-      {/* FINAL CTA */}
-      <section className="border-t relative overflow-hidden" style={{ borderColor: 'rgba(255,255,255,0.06)', background: 'var(--bg-void)' }}>
-        <div className="absolute inset-0 pointer-events-none">
-          <div className="absolute inset-0 terminal-grid opacity-25" />
-          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[700px] h-[350px]"
-            style={{ background: 'radial-gradient(ellipse, rgba(204,255,0,0.07) 0%, transparent 70%)', filter: 'blur(50px)' }} />
-        </div>
-        <div className="max-w-[1440px] mx-auto px-6 py-32 text-center relative z-10">
-          <motion.div
+            HOW APEX THINKS
+          </motion.span>
+          <motion.h2
             initial={{ opacity: 0, y: 20 }}
             whileInView={{ opacity: 1, y: 0 }}
             viewport={{ once: true }}
-            transition={{ duration: 0.55, ease: [0.16, 1, 0.3, 1] }}
+            transition={{ duration: 0.6, delay: 0.1 }}
+            className="font-display font-black tracking-tighter"
+            style={{ fontSize: 'clamp(2.4rem, 5vw, 5rem)', lineHeight: 0.92, color: '#fff', marginBottom: 20 }}
           >
-            <div className="inline-flex items-center gap-2 mb-8" style={{ fontFamily: 'var(--font-data)', fontSize: 8, color: 'var(--accent-primary)', border: '1px solid rgba(204,255,0,0.22)', padding: '5px 14px', letterSpacing: '0.20em', textTransform: 'uppercase' }}>
-              <Terminal size={10} />
-              Ready to launch
-            </div>
-            <h2 className="font-display font-black tracking-tighter" style={{ fontSize: 'clamp(2.8rem,6vw,5.5rem)', color: '#fff', marginBottom: 20, lineHeight: '0.92' }}>
-              Stop guessing.<br />
-              <span style={{ color: 'var(--accent-primary)', textShadow: '0 0 60px rgba(204,255,0,0.25)' }}>Start knowing.</span>
-            </h2>
-            <p style={{ fontFamily: 'var(--font-body)', fontSize: 16, color: 'rgba(255,255,255,0.40)', maxWidth: 440, margin: '0 auto 40px', lineHeight: 1.65 }}>
-              Five intelligence layers. One verdict. The edge you've been looking for.
-            </p>
-            <div className="flex flex-wrap items-center justify-center gap-4">
-              <Link
-                to="/dashboard"
-                className="inline-flex items-center gap-3 px-10 py-4 font-bold transition-all hover:bg-white group"
-                style={{ fontFamily: 'var(--font-data)', fontSize: 11, letterSpacing: '0.16em', textTransform: 'uppercase', background: 'var(--accent-primary)', color: '#000' }}
-              >
-                <Zap size={14} />
-                Open Terminal
-                <ChevronRight size={12} className="group-hover:translate-x-0.5 transition-transform" />
-              </Link>
-              <Link
-                to="/track-record"
-                className="inline-flex items-center gap-3 px-8 py-4 transition-all hover:border-white/40 group"
-                style={{ fontFamily: 'var(--font-data)', fontSize: 11, letterSpacing: '0.16em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.55)', border: '1px solid rgba(255,255,255,0.16)' }}
-              >
-                Track Record
-                <ArrowRight size={12} className="group-hover:translate-x-0.5 transition-transform" />
-              </Link>
-            </div>
-            <div className="mt-12 flex items-center justify-center gap-6 flex-wrap">
-              {['No order execution','No custody','Analysis only','Cancel anytime'].map(t => (
-                <div key={t} className="flex items-center gap-2" style={{ fontFamily: 'var(--font-data)', fontSize: 8, color: 'rgba(255,255,255,0.28)', letterSpacing: '0.12em', textTransform: 'uppercase' }}>
-                  <CheckCircle size={10} style={{ color: 'rgba(255,255,255,0.22)' }} />
-                  {t}
-                </div>
-              ))}
-            </div>
-          </motion.div>
+            Five AI layers.<br />
+            <span style={{ color: 'rgba(255,255,255,0.22)', WebkitTextStroke: '1px rgba(255,255,255,0.20)' }}>
+              One verdict.
+            </span>
+          </motion.h2>
+          <motion.p
+            initial={{ opacity: 0, y: 10 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            viewport={{ once: true }}
+            transition={{ duration: 0.5, delay: 0.2 }}
+            style={{ fontFamily: 'var(--font-body)', fontSize: 15, color: 'rgba(255,255,255,0.38)', maxWidth: 480, margin: '0 auto', lineHeight: 1.7 }}
+          >
+            No single indicator is reliable. APEX fuses five independent intelligence
+            streams into a consensus signal — then tells you exactly what to do.
+          </motion.p>
         </div>
-      </section>
 
-      {/* FOOTER */}
-      <footer className="border-t relative" style={{ borderColor: 'rgba(255,255,255,0.06)', background: 'rgba(3,5,8,0.98)' }}>
-        <div className="max-w-[1440px] mx-auto px-6 py-14 grid md:grid-cols-4 gap-10">
-          <div className="md:col-span-1">
-            <h3 style={{ fontFamily: 'var(--font-display)', fontSize: 18, fontWeight: 900, color: 'var(--accent-primary)', letterSpacing: '-0.01em', marginBottom: 10 }}>
-              APEX ENGINE
-            </h3>
-            <p style={{ fontFamily: 'var(--font-data)', fontSize: 9, color: 'rgba(255,255,255,0.22)', letterSpacing: '0.12em', textTransform: 'uppercase', lineHeight: 2 }}>
-              Intelligence only.<br />
-              Not a broker.<br />
-              Not advice.
-            </p>
+        {/* PulseBeams — decorative centerpiece with AI synthesis node */}
+        <div className="relative mb-16 flex justify-center">
+          <div className="w-full max-w-3xl">
+            <PulseBeams
+              beams={INTEL_BEAMS}
+              width={860}
+              height={530}
+              baseColor="rgba(255,255,255,0.05)"
+              accentColor="rgba(255,255,255,0.12)"
+              gradientColors={{ start: '#00D4FF', middle: '#9D6FFF', end: '#CCFF00' }}
+              className="w-full"
+            >
+              {/* Center AI synthesis node */}
+              <div
+                className="relative flex flex-col items-center justify-center"
+                style={{
+                  width: 130, height: 130,
+                  border: '1px solid rgba(0,232,121,0.28)',
+                  borderRadius: 2,
+                  background: 'rgba(0,232,121,0.05)',
+                  backdropFilter: 'blur(16px)',
+                  WebkitBackdropFilter: 'blur(16px)',
+                }}
+              >
+                <HudCorners color="#00E879" size={12} thickness={1.5} />
+                <Brain size={26} color="#00E879" strokeWidth={1.5} />
+                <span style={{ fontFamily: 'var(--font-data)', fontSize: 8, letterSpacing: '0.16em', color: '#00E879', marginTop: 10, textAlign: 'center' }}>
+                  AI SYNTHESIS
+                </span>
+                <span
+                  style={{
+                    width: 5, height: 5, borderRadius: '50%', background: '#00E879',
+                    boxShadow: '0 0 8px #00E879', position: 'absolute', top: 8, right: 8,
+                    animation: 'dataPulse 2s ease-in-out infinite',
+                  }}
+                />
+              </div>
+            </PulseBeams>
           </div>
+        </div>
 
-          {[
-            { heading: 'Platform', color: 'var(--accent-primary)', links: [{ to: '/dashboard', label: 'Signal Hub' }, { to: '/charts', label: 'Charts' }, { to: '/track-record', label: 'Track Record' }] },
-            { heading: 'Account',  color: 'var(--accent-cyan)',    links: [{ to: '/login', label: 'Login' }, { to: '/signup', label: 'Join Free' }, { to: '/chat', label: 'AI Assistant' }] },
-            { heading: 'Legal',    color: 'rgba(255,255,255,0.30)', links: [{ to: '/risk-disclosure', label: 'Risk Disclosure' }, { to: '/privacy', label: 'Privacy' }, { to: '/terms', label: 'Terms' }, { to: '/disclaimer', label: 'Disclaimer' }] },
-          ].map(({ heading, color, links }) => (
-            <div key={heading}>
-              <span style={{ fontFamily: 'var(--font-data)', fontSize: 9, fontWeight: 700, letterSpacing: '0.18em', textTransform: 'uppercase', color, display: 'block', marginBottom: 14 }}>
-                {heading}
-              </span>
-              <div className="space-y-3">
-                {links.map(({ to, label }) => (
-                  <Link key={to} to={to}
-                    style={{ fontFamily: 'var(--font-body)', fontSize: 13, color: 'rgba(255,255,255,0.38)', display: 'block', transition: 'color 0.15s' }}
-                    className="hover:text-white/65"
-                  >
-                    {label}
-                  </Link>
+        {/* Five layer cards — responsive grid */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+          {LAYERS.map((l, i) => (
+            <motion.div
+              key={l.id}
+              initial={{ opacity: 0, y: 20 }}
+              whileInView={{ opacity: 1, y: 0 }}
+              viewport={{ once: true }}
+              transition={{ duration: 0.45, delay: i * 0.07 }}
+              className="relative flex flex-col gap-3 p-5 cursor-default"
+              style={{
+                background: `${l.color}07`,
+                border: `1px solid ${l.color}20`,
+                borderRadius: 2,
+                transition: 'border-color 0.2s, box-shadow 0.2s',
+              }}
+              onMouseEnter={e => {
+                e.currentTarget.style.borderColor = `${l.color}40`
+                e.currentTarget.style.boxShadow = `0 0 24px ${l.color}10`
+              }}
+              onMouseLeave={e => {
+                e.currentTarget.style.borderColor = `${l.color}20`
+                e.currentTarget.style.boxShadow = 'none'
+              }}
+            >
+              <HudCorners color={l.color} size={8} thickness={1} />
+              <div className="flex items-center gap-2">
+                <div style={{ width: 32, height: 32, display: 'flex', alignItems: 'center', justifyContent: 'center', background: `${l.color}10`, border: `1px solid ${l.color}20`, borderRadius: 2, flexShrink: 0 }}>
+                  <l.icon size={15} color={l.color} strokeWidth={1.5} />
+                </div>
+                <span style={{ fontFamily: 'var(--font-data)', fontSize: 9, color: l.color, letterSpacing: '0.14em' }}>
+                  LAYER {l.id}
+                </span>
+              </div>
+              <h3 style={{ fontFamily: 'var(--font-body)', fontSize: 13, fontWeight: 700, color: '#fff', lineHeight: 1.3 }}>
+                {l.label}
+              </h3>
+              <p style={{ fontFamily: 'var(--font-body)', fontSize: 12, color: 'rgba(255,255,255,0.40)', lineHeight: 1.6 }}>
+                {l.desc}
+              </p>
+            </motion.div>
+          ))}
+        </div>
+      </div>
+    </section>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 4 — LAB SHADER DIVIDER
+// ─────────────────────────────────────────────────────────────────────────────
+function ShaderDivider() {
+  return (
+    <div className="relative w-full overflow-hidden" style={{ height: 340, background: '#000' }}>
+      <div className="absolute inset-0" style={{ opacity: 0.55 }}>
+        <LabShader />
+      </div>
+      {/* Gradient masks to blend edges */}
+      <div className="absolute inset-0" style={{ background: 'linear-gradient(180deg, var(--bg-void) 0%, transparent 20%, transparent 80%, var(--bg-void) 100%)' }} />
+      <div className="absolute inset-0" style={{ background: 'linear-gradient(90deg, var(--bg-void) 0%, transparent 15%, transparent 85%, var(--bg-void) 100%)' }} />
+
+      {/* Center text overlay */}
+      <div className="absolute inset-0 flex flex-col items-center justify-center text-center z-10 px-6">
+        <motion.span
+          initial={{ opacity: 0 }}
+          whileInView={{ opacity: 1 }}
+          viewport={{ once: true }}
+          style={{ fontFamily: 'var(--font-data)', fontSize: 10, letterSpacing: '0.24em', color: 'rgba(255,255,255,0.38)', marginBottom: 12, display: 'block' }}
+        >
+          INTELLIGENCE INFRASTRUCTURE
+        </motion.span>
+        <motion.p
+          initial={{ opacity: 0, y: 10 }}
+          whileInView={{ opacity: 1, y: 0 }}
+          viewport={{ once: true }}
+          transition={{ delay: 0.15 }}
+          className="font-display font-black"
+          style={{ fontSize: 'clamp(1.6rem, 3.5vw, 3rem)', color: '#fff', lineHeight: 1.1, letterSpacing: '-0.02em', maxWidth: 600 }}
+        >
+          Real-time. Every market. <span style={{ color: '#CCFF00' }}>Every second.</span>
+        </motion.p>
+      </div>
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 5 — PLATFORM PREVIEW
+// ─────────────────────────────────────────────────────────────────────────────
+const MOCK_SIGNALS = [
+  { ticker: 'NVDA', verdict: 'STRONG BUY', confidence: 94, color: '#00E879', change: '+4.2%' },
+  { ticker: 'TSLA', verdict: 'BUY',        confidence: 78, color: '#52F7A2', change: '+1.8%' },
+  { ticker: 'SPY',  verdict: 'WATCH',      confidence: 61, color: '#FFB800', change: '-0.3%' },
+  { ticker: 'AMZN', verdict: 'BUY',        confidence: 82, color: '#52F7A2', change: '+2.1%' },
+  { ticker: 'META', verdict: 'STRONG BUY', confidence: 91, color: '#00E879', change: '+3.6%' },
+]
+
+function PlatformPreview() {
+  const ref = useRef(null)
+  const { scrollYProgress } = useScroll({ target: ref, offset: ['start end', 'end start'] })
+  const rotateX = useSpring(useTransform(scrollYProgress, [0, 0.4], [20, 0]), { stiffness: 80, damping: 22 })
+  const scale   = useSpring(useTransform(scrollYProgress, [0, 0.4], [0.88, 1]), { stiffness: 80, damping: 22 })
+  const opacity = useTransform(scrollYProgress, [0, 0.18], [0, 1])
+
+  return (
+    <section ref={ref} className="relative overflow-hidden py-32" style={{ background: 'var(--bg-void)' }}>
+      {/* Glow layer */}
+      <div aria-hidden className="absolute inset-0 pointer-events-none" style={{ background: 'radial-gradient(ellipse 60% 40% at 50% 50%, rgba(0,212,255,0.04) 0%, transparent 70%)' }} />
+
+      <div className="max-w-7xl mx-auto px-6">
+        <div className="text-center mb-16">
+          <motion.span
+            initial={{ opacity: 0 }}
+            whileInView={{ opacity: 1 }}
+            viewport={{ once: true }}
+            style={{ fontFamily: 'var(--font-data)', fontSize: 10, letterSpacing: '0.22em', color: '#00D4FF', display: 'block', marginBottom: 14 }}
+          >
+            PLATFORM PREVIEW
+          </motion.span>
+          <motion.h2
+            initial={{ opacity: 0, y: 20 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            viewport={{ once: true }}
+            transition={{ duration: 0.6 }}
+            className="font-display font-black tracking-tighter"
+            style={{ fontSize: 'clamp(2.2rem, 4.5vw, 4.5rem)', color: '#fff', lineHeight: 0.92, marginBottom: 16 }}
+          >
+            The terminal, on your screen.<br />
+            <span style={{ color: 'var(--accent-primary)' }}>Every signal. One view.</span>
+          </motion.h2>
+        </div>
+
+        {/* 3-D browser frame */}
+        <motion.div style={{ perspective: '1200px', opacity }} className="mx-auto max-w-5xl">
+          <motion.div style={{ rotateX, scale, transformOrigin: 'center top', transformStyle: 'preserve-3d' }}>
+            {/* Glow under frame */}
+            <motion.div
+              style={{ opacity: useTransform(scrollYProgress, [0.1, 0.5], [0, 1]) }}
+              className="absolute -bottom-10 left-1/2 -translate-x-1/2 w-3/4 h-20 pointer-events-none"
+              aria-hidden
+            >
+              <div style={{ width: '100%', height: '100%', background: 'radial-gradient(ellipse, rgba(0,212,255,0.18) 0%, transparent 70%)', filter: 'blur(20px)' }} />
+            </motion.div>
+
+            {/* Chrome bar */}
+            <div style={{
+              background: '#0D1117',
+              border: '1px solid rgba(255,255,255,0.09)',
+              borderBottom: 'none',
+              borderRadius: '6px 6px 0 0',
+              padding: '0 14px',
+              height: 40,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 10,
+            }}>
+              <div className="flex gap-1.5">
+                {['#FF5F57','#FEBC2E','#28C840'].map(c => (
+                  <div key={c} style={{ width: 9, height: 9, borderRadius: '50%', background: c, opacity: 0.8 }} />
                 ))}
               </div>
+              <div style={{ flex: 1, maxWidth: 340, margin: '0 auto', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.07)', borderRadius: 3, height: 22, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+                <Lock size={9} style={{ opacity: 0.35 }} />
+                <span style={{ fontFamily: 'var(--font-data)', fontSize: 10, color: 'rgba(255,255,255,0.28)', letterSpacing: '0.05em' }}>apex-engine.com/dashboard</span>
+              </div>
+            </div>
+
+            {/* Dashboard body */}
+            <div style={{
+              background: '#07090F',
+              border: '1px solid rgba(255,255,255,0.08)',
+              borderTop: 'none',
+              borderRadius: '0 0 6px 6px',
+              overflow: 'hidden',
+              minHeight: 420,
+            }}>
+              {/* Inner nav */}
+              <div style={{ background: '#0D1117', borderBottom: '1px solid rgba(255,255,255,0.06)', padding: '10px 20px', display: 'flex', alignItems: 'center', gap: 16 }}>
+                <span style={{ fontFamily: 'var(--font-display)', fontSize: 11, fontWeight: 800, color: '#CCFF00', letterSpacing: '0.08em' }}>APEX</span>
+                <div className="flex gap-4 ml-4">
+                  {['SIGNALS','CHARTS','TRACK RECORD','CIPHER'].map(t => (
+                    <span key={t} style={{ fontFamily: 'var(--font-data)', fontSize: 9, color: t === 'SIGNALS' ? '#00D4FF' : 'rgba(255,255,255,0.28)', letterSpacing: '0.12em', cursor: 'default' }}>{t}</span>
+                  ))}
+                </div>
+                <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ width: 5, height: 5, borderRadius: '50%', background: '#00E879', boxShadow: '0 0 6px #00E879', display: 'block' }} />
+                  <span style={{ fontFamily: 'var(--font-data)', fontSize: 9, color: 'rgba(255,255,255,0.35)', letterSpacing: '0.1em' }}>MARKET OPEN</span>
+                </div>
+              </div>
+
+              {/* Signal list */}
+              <div style={{ padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {MOCK_SIGNALS.map((sig, i) => (
+                  <motion.div
+                    key={sig.ticker}
+                    initial={{ opacity: 0, x: -12 }}
+                    whileInView={{ opacity: 1, x: 0 }}
+                    viewport={{ once: true }}
+                    transition={{ delay: 0.4 + i * 0.08, duration: 0.4 }}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 16,
+                      padding: '10px 14px',
+                      background: `${sig.color}06`,
+                      border: `1px solid ${sig.color}18`,
+                      borderLeft: `2px solid ${sig.color}`,
+                      borderRadius: 2,
+                    }}
+                  >
+                    <span style={{ fontFamily: 'var(--font-display)', fontSize: 13, fontWeight: 800, color: '#fff', minWidth: 52 }}>{sig.ticker}</span>
+                    <span style={{ fontFamily: 'var(--font-data)', fontSize: 10, color: sig.color, letterSpacing: '0.1em', minWidth: 100 }}>{sig.verdict}</span>
+                    <div style={{ flex: 1, height: 3, background: 'rgba(255,255,255,0.05)', borderRadius: 2 }}>
+                      <div style={{ height: '100%', width: `${sig.confidence}%`, background: sig.color, borderRadius: 2, opacity: 0.7 }} />
+                    </div>
+                    <span style={{ fontFamily: 'var(--font-data)', fontSize: 11, color: 'rgba(255,255,255,0.45)', minWidth: 36 }}>{sig.confidence}%</span>
+                    <span style={{ fontFamily: 'var(--font-data)', fontSize: 11, color: sig.color, minWidth: 48, textAlign: 'right' }}>{sig.change}</span>
+                  </motion.div>
+                ))}
+              </div>
+            </div>
+          </motion.div>
+        </motion.div>
+      </div>
+    </section>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 6 — BENTO FEATURES
+// ─────────────────────────────────────────────────────────────────────────────
+const FEATURES = [
+  {
+    icon: Brain,
+    title: 'AI Signal Engine',
+    desc: 'Claude AI synthesizes all market data into a single STRONG BUY → STRONG AVOID verdict with full reasoning.',
+    color: '#00E879',
+    size: 'large',
+  },
+  {
+    icon: Activity,
+    title: 'Options Flow / UOA',
+    desc: 'Detect unusual options activity the moment it happens. Sweeps, blocks, dark pool prints.',
+    color: '#9D6FFF',
+    size: 'normal',
+  },
+  {
+    icon: BarChart3,
+    title: 'Advanced Charting',
+    desc: '50+ overlays. TradingView-grade charts. Pattern recognition built in.',
+    color: '#00D4FF',
+    size: 'normal',
+  },
+  {
+    icon: Shield,
+    title: 'Track Record',
+    desc: 'Every signal logged, every outcome tracked. Full transparency on accuracy.',
+    color: '#CCFF00',
+    size: 'normal',
+  },
+  {
+    icon: Globe,
+    title: 'Market Regime',
+    desc: 'Macro context engine. Knows when to be aggressive vs defensive.',
+    color: '#FFB800',
+    size: 'normal',
+  },
+  {
+    icon: Bot,
+    title: 'CIPHER Agent',
+    desc: 'Your personal AI analyst. Ask anything. Get institutional-grade answers.',
+    color: '#00D4FF',
+    size: 'normal',
+  },
+]
+
+function BentoFeatures() {
+  return (
+    <section className="relative py-28 md:py-40" style={{ background: 'var(--bg-deep)' }}>
+      <div className="max-w-7xl mx-auto px-6">
+        <div className="text-center mb-16">
+          <motion.span
+            initial={{ opacity: 0 }}
+            whileInView={{ opacity: 1 }}
+            viewport={{ once: true }}
+            style={{ fontFamily: 'var(--font-data)', fontSize: 10, letterSpacing: '0.22em', color: '#CCFF00', display: 'block', marginBottom: 14 }}
+          >
+            PLATFORM FEATURES
+          </motion.span>
+          <motion.h2
+            initial={{ opacity: 0, y: 20 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            viewport={{ once: true }}
+            transition={{ duration: 0.6 }}
+            className="font-display font-black tracking-tighter"
+            style={{ fontSize: 'clamp(2.2rem, 4.5vw, 4.5rem)', color: '#fff', lineHeight: 0.92 }}
+          >
+            Everything you need.<br />
+            <span style={{ color: 'rgba(255,255,255,0.20)', WebkitTextStroke: '1px rgba(255,255,255,0.20)' }}>
+              Nothing you don't.
+            </span>
+          </motion.h2>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          {FEATURES.map((f, i) => (
+            <motion.div
+              key={f.title}
+              initial={{ opacity: 0, y: 24 }}
+              whileInView={{ opacity: 1, y: 0 }}
+              viewport={{ once: true }}
+              transition={{ duration: 0.5, delay: i * 0.07 }}
+              className={`group relative p-6 cursor-pointer ${i === 0 ? 'lg:col-span-2' : ''}`}
+              style={{
+                background: `${f.color}06`,
+                border: `1px solid ${f.color}18`,
+                borderRadius: 3,
+                transition: 'all 0.25s ease',
+              }}
+              onMouseEnter={e => {
+                e.currentTarget.style.borderColor = `${f.color}40`
+                e.currentTarget.style.background = `${f.color}0D`
+                e.currentTarget.style.transform = 'translateY(-2px)'
+                e.currentTarget.style.boxShadow = `0 8px 40px ${f.color}12`
+              }}
+              onMouseLeave={e => {
+                e.currentTarget.style.borderColor = `${f.color}18`
+                e.currentTarget.style.background = `${f.color}06`
+                e.currentTarget.style.transform = 'translateY(0)'
+                e.currentTarget.style.boxShadow = 'none'
+              }}
+            >
+              <HudCorners color={f.color} size={10} thickness={1} />
+              <div className="flex items-start gap-4">
+                <div
+                  style={{
+                    width: 42, height: 42, flexShrink: 0,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    background: `${f.color}12`,
+                    border: `1px solid ${f.color}28`,
+                    borderRadius: 2,
+                  }}
+                >
+                  <f.icon size={20} color={f.color} strokeWidth={1.5} />
+                </div>
+                <div>
+                  <h3 style={{ fontFamily: 'var(--font-display)', fontSize: 14, fontWeight: 700, color: '#fff', marginBottom: 8, letterSpacing: '0.04em' }}>
+                    {f.title}
+                  </h3>
+                  <p style={{ fontFamily: 'var(--font-body)', fontSize: 13, color: 'rgba(255,255,255,0.42)', lineHeight: 1.6 }}>
+                    {f.desc}
+                  </p>
+                </div>
+              </div>
+              {i === 0 && (
+                <div className="mt-6 flex items-center gap-2" style={{ color: f.color }}>
+                  <span style={{ fontFamily: 'var(--font-data)', fontSize: 10, letterSpacing: '0.14em' }}>EXPLORE ENGINE</span>
+                  <ChevronRight size={12} />
+                </div>
+              )}
+            </motion.div>
+          ))}
+        </div>
+      </div>
+    </section>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 7 — PRICING
+// ─────────────────────────────────────────────────────────────────────────────
+const TIERS = [
+  {
+    name: 'FREE',
+    price: '$0',
+    period: '/mo',
+    color: 'rgba(255,255,255,0.40)',
+    borderColor: 'rgba(255,255,255,0.08)',
+    bgColor: 'rgba(255,255,255,0.02)',
+    features: ['5 signals/day', '1 asset class', 'Basic indicators', 'Community access'],
+    cta: 'Get Started',
+    ctaTo: '/signup',
+    featured: false,
+  },
+  {
+    name: 'EDGE',
+    price: '$29',
+    period: '/mo',
+    color: 'rgba(255,255,255,0.65)',
+    borderColor: 'rgba(255,255,255,0.14)',
+    bgColor: 'rgba(255,255,255,0.04)',
+    features: ['50 signals/day', '3 asset classes', 'All indicators', 'Options flow data', 'Email alerts'],
+    cta: 'Start Edge',
+    ctaTo: '/signup',
+    featured: false,
+  },
+  {
+    name: 'ALPHA',
+    price: '$79',
+    period: '/mo',
+    color: '#00D4FF',
+    borderColor: 'rgba(0,212,255,0.28)',
+    bgColor: 'rgba(0,212,255,0.04)',
+    features: ['Unlimited signals', 'All asset classes', 'PRISM multi-timeframe', 'Real-time UOA alerts', 'Morning brief', 'Priority support'],
+    cta: 'Go Alpha',
+    ctaTo: '/signup',
+    featured: true,
+    badge: 'MOST POPULAR',
+  },
+  {
+    name: 'APEX',
+    price: '$149',
+    period: '/mo',
+    color: '#CCFF00',
+    borderColor: 'rgba(204,255,0,0.28)',
+    bgColor: 'rgba(204,255,0,0.04)',
+    features: ['Everything in ALPHA', 'CIPHER AI agent', 'Portfolio analysis', 'Custom screeners', 'API access', 'Dedicated analyst'],
+    cta: 'Go APEX',
+    ctaTo: '/signup',
+    featured: false,
+  },
+]
+
+function PricingSection() {
+  return (
+    <section className="relative py-28 md:py-40" style={{ background: 'var(--bg-void)' }}>
+      <div
+        aria-hidden
+        className="absolute inset-0 pointer-events-none"
+        style={{ background: 'radial-gradient(ellipse 70% 50% at 50% 100%, rgba(204,255,0,0.03) 0%, transparent 70%)' }}
+      />
+
+      <div className="max-w-7xl mx-auto px-6">
+        <div className="text-center mb-16">
+          <motion.span
+            initial={{ opacity: 0 }}
+            whileInView={{ opacity: 1 }}
+            viewport={{ once: true }}
+            style={{ fontFamily: 'var(--font-data)', fontSize: 10, letterSpacing: '0.22em', color: '#CCFF00', display: 'block', marginBottom: 14 }}
+          >
+            PRICING
+          </motion.span>
+          <motion.h2
+            initial={{ opacity: 0, y: 20 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            viewport={{ once: true }}
+            transition={{ duration: 0.6 }}
+            className="font-display font-black tracking-tighter"
+            style={{ fontSize: 'clamp(2.2rem, 4.5vw, 4.5rem)', color: '#fff', lineHeight: 0.92 }}
+          >
+            Your edge level.
+          </motion.h2>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+          {TIERS.map((t, i) => (
+            <motion.div
+              key={t.name}
+              initial={{ opacity: 0, y: 24 }}
+              whileInView={{ opacity: 1, y: 0 }}
+              viewport={{ once: true }}
+              transition={{ duration: 0.5, delay: i * 0.08 }}
+              className="relative flex flex-col"
+              style={{
+                background: t.bgColor,
+                border: `1px solid ${t.borderColor}`,
+                borderRadius: 3,
+                padding: 24,
+                ...(t.featured ? { boxShadow: `0 0 40px rgba(0,212,255,0.10)` } : {}),
+              }}
+            >
+              {t.featured && (
+                <div
+                  style={{
+                    position: 'absolute',
+                    top: -10,
+                    left: '50%',
+                    transform: 'translateX(-50%)',
+                    background: '#00D4FF',
+                    color: '#000',
+                    fontFamily: 'var(--font-display)',
+                    fontSize: 9,
+                    fontWeight: 800,
+                    letterSpacing: '0.14em',
+                    padding: '3px 12px',
+                    borderRadius: 2,
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {t.badge}
+                </div>
+              )}
+
+              <HudCorners color={t.color} size={10} thickness={1} />
+
+              <span style={{ fontFamily: 'var(--font-display)', fontSize: 11, fontWeight: 800, color: t.color, letterSpacing: '0.14em', marginBottom: 16 }}>
+                {t.name}
+              </span>
+
+              <div className="flex items-end gap-1 mb-6">
+                <span className="font-display font-black" style={{ fontSize: '2.6rem', lineHeight: 1, color: '#fff' }}>{t.price}</span>
+                <span style={{ fontFamily: 'var(--font-data)', fontSize: 12, color: 'rgba(255,255,255,0.35)', marginBottom: 4 }}>{t.period}</span>
+              </div>
+
+              <ul className="flex flex-col gap-2.5 mb-8 flex-1">
+                {t.features.map(f => (
+                  <li key={f} className="flex items-start gap-2.5">
+                    <CheckCircle2 size={13} color={t.color} strokeWidth={2} style={{ flexShrink: 0, marginTop: 2 }} />
+                    <span style={{ fontFamily: 'var(--font-body)', fontSize: 13, color: 'rgba(255,255,255,0.55)', lineHeight: 1.4 }}>{f}</span>
+                  </li>
+                ))}
+              </ul>
+
+              <Link
+                to={t.ctaTo}
+                className="flex items-center justify-center gap-2 cursor-pointer"
+                style={{
+                  background: t.featured ? '#00D4FF' : 'transparent',
+                  color: t.featured ? '#000' : t.color,
+                  border: `1px solid ${t.borderColor}`,
+                  borderRadius: 2,
+                  padding: '11px 0',
+                  fontFamily: 'var(--font-display)',
+                  fontWeight: 700,
+                  fontSize: 11,
+                  letterSpacing: '0.12em',
+                  transition: 'all 0.2s',
+                  textDecoration: 'none',
+                }}
+                onMouseEnter={e => {
+                  if (!t.featured) {
+                    e.currentTarget.style.background = `${t.color}12`
+                    e.currentTarget.style.borderColor = t.color
+                  } else {
+                    e.currentTarget.style.boxShadow = `0 0 20px rgba(0,212,255,0.35)`
+                  }
+                }}
+                onMouseLeave={e => {
+                  if (!t.featured) {
+                    e.currentTarget.style.background = 'transparent'
+                    e.currentTarget.style.borderColor = t.borderColor
+                  } else {
+                    e.currentTarget.style.boxShadow = 'none'
+                  }
+                }}
+              >
+                {t.cta}
+              </Link>
+            </motion.div>
+          ))}
+        </div>
+
+        <motion.p
+          initial={{ opacity: 0 }}
+          whileInView={{ opacity: 1 }}
+          viewport={{ once: true }}
+          transition={{ delay: 0.5 }}
+          className="text-center mt-8"
+          style={{ fontFamily: 'var(--font-data)', fontSize: 11, color: 'rgba(255,255,255,0.25)', letterSpacing: '0.1em' }}
+        >
+          No contracts. Cancel anytime. 7-day free trial on all paid plans.
+        </motion.p>
+      </div>
+    </section>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 8 — FINAL CTA (with RadialShader bg)
+// ─────────────────────────────────────────────────────────────────────────────
+function CtaSection() {
+  return (
+    <section
+      className="relative overflow-hidden py-32 md:py-48"
+      style={{ background: '#000' }}
+    >
+      {/* RadialShader background */}
+      <div className="absolute inset-0" style={{ opacity: 0.35 }}>
+        <RadialShader />
+      </div>
+
+      {/* Gradient overlays */}
+      <div className="absolute inset-0" style={{ background: 'linear-gradient(180deg, #000 0%, transparent 20%, transparent 80%, #000 100%)' }} />
+      <div className="absolute inset-0" style={{ background: 'linear-gradient(90deg, #000 0%, transparent 20%, transparent 80%, #000 100%)' }} />
+
+      <Scanlines />
+
+      <div className="relative z-10 max-w-4xl mx-auto px-6 text-center">
+        <motion.span
+          initial={{ opacity: 0 }}
+          whileInView={{ opacity: 1 }}
+          viewport={{ once: true }}
+          style={{ fontFamily: 'var(--font-data)', fontSize: 10, letterSpacing: '0.24em', color: '#CCFF00', display: 'block', marginBottom: 20 }}
+        >
+          YOUR EDGE STARTS HERE
+        </motion.span>
+
+        <motion.h2
+          initial={{ opacity: 0, y: 28 }}
+          whileInView={{ opacity: 1, y: 0 }}
+          viewport={{ once: true }}
+          transition={{ duration: 0.7, ease: [0.16, 1, 0.3, 1] }}
+          className="font-display font-black tracking-tighter"
+          style={{ fontSize: 'clamp(3rem, 7vw, 7rem)', lineHeight: 0.9, marginBottom: 24 }}
+        >
+          <span style={{ color: '#fff' }}>Stop guessing.</span><br />
+          <span
+            style={{
+              background: 'linear-gradient(135deg, #CCFF00 0%, #00D4FF 55%, #9D6FFF 100%)',
+              WebkitBackgroundClip: 'text',
+              WebkitTextFillColor: 'transparent',
+            }}
+          >
+            Start knowing.
+          </span>
+        </motion.h2>
+
+        <motion.p
+          initial={{ opacity: 0, y: 14 }}
+          whileInView={{ opacity: 1, y: 0 }}
+          viewport={{ once: true }}
+          transition={{ duration: 0.5, delay: 0.2 }}
+          style={{ fontFamily: 'var(--font-body)', fontSize: 16, color: 'rgba(255,255,255,0.42)', maxWidth: 480, margin: '0 auto 2.5rem', lineHeight: 1.7 }}
+        >
+          Join thousands of traders who use APEX to cut through market noise.
+          Your first signals are free — no credit card required.
+        </motion.p>
+
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          whileInView={{ opacity: 1, y: 0 }}
+          viewport={{ once: true }}
+          transition={{ duration: 0.5, delay: 0.35 }}
+          className="flex flex-col sm:flex-row items-center justify-center gap-4"
+        >
+          <Link
+            to="/signup"
+            className="flex items-center gap-2.5 cursor-pointer"
+            style={{
+              background: '#CCFF00',
+              color: '#000',
+              borderRadius: 2,
+              padding: '16px 40px',
+              fontFamily: 'var(--font-display)',
+              fontWeight: 800,
+              fontSize: 13,
+              letterSpacing: '0.12em',
+              transition: 'all 0.2s',
+            }}
+            onMouseEnter={e => { e.currentTarget.style.boxShadow = '0 0 40px rgba(204,255,0,0.50)'; e.currentTarget.style.transform = 'translateY(-2px)' }}
+            onMouseLeave={e => { e.currentTarget.style.boxShadow = 'none'; e.currentTarget.style.transform = 'none' }}
+          >
+            GET STARTED FREE
+            <ArrowRight size={15} />
+          </Link>
+
+          <Link
+            to="/pricing"
+            className="flex items-center gap-2 cursor-pointer"
+            style={{
+              background: 'transparent',
+              color: 'rgba(255,255,255,0.50)',
+              fontFamily: 'var(--font-data)',
+              fontSize: 11,
+              letterSpacing: '0.14em',
+              transition: 'color 0.2s',
+            }}
+            onMouseEnter={e => { e.currentTarget.style.color = '#fff' }}
+            onMouseLeave={e => { e.currentTarget.style.color = 'rgba(255,255,255,0.50)' }}
+          >
+            SEE ALL PLANS
+            <ChevronRight size={12} />
+          </Link>
+        </motion.div>
+      </div>
+    </section>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 9 — FOOTER
+// ─────────────────────────────────────────────────────────────────────────────
+function Footer() {
+  const COLS = [
+    {
+      label: 'Platform',
+      links: [
+        { to: '/dashboard', label: 'Signals' },
+        { to: '/charts',    label: 'Charts' },
+        { to: '/track-record', label: 'Track Record' },
+        { to: '/agent',     label: 'CIPHER Agent' },
+        { to: '/pricing',   label: 'Pricing' },
+      ],
+    },
+    {
+      label: 'Account',
+      links: [
+        { to: '/signup', label: 'Sign Up' },
+        { to: '/login',  label: 'Login' },
+        { to: '/account', label: 'Settings' },
+      ],
+    },
+    {
+      label: 'Legal',
+      links: [
+        { to: '/privacy',       label: 'Privacy Policy' },
+        { to: '/terms',         label: 'Terms of Service' },
+        { to: '/risk-disclosure', label: 'Risk Disclosure' },
+        { to: '/disclaimer',    label: 'Disclaimer' },
+      ],
+    },
+  ]
+
+  return (
+    <footer style={{ background: 'var(--bg-void)', borderTop: '1px solid rgba(255,255,255,0.06)', padding: '60px 0 40px' }}>
+      <div className="max-w-7xl mx-auto px-6">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-10 mb-14">
+          {/* Brand */}
+          <div className="col-span-2 md:col-span-1">
+            <div className="flex items-center gap-2 mb-4">
+              <span className="font-display font-black" style={{ fontSize: 18, color: '#CCFF00', letterSpacing: '0.06em' }}>APEX</span>
+              <span style={{ fontFamily: 'var(--font-data)', fontSize: 9, color: 'rgba(255,255,255,0.25)', letterSpacing: '0.14em', marginTop: 2 }}>DECISION ENGINE</span>
+            </div>
+            <p style={{ fontFamily: 'var(--font-body)', fontSize: 13, color: 'rgba(255,255,255,0.32)', lineHeight: 1.65, maxWidth: 220 }}>
+              Five layers of market intelligence. One decisive signal. Built for traders who demand an edge.
+            </p>
+            <div className="flex items-center gap-2 mt-5">
+              <span style={{ width: 5, height: 5, borderRadius: '50%', background: '#00E879', boxShadow: '0 0 6px #00E879', display: 'block', animation: 'dataPulse 2s ease-in-out infinite' }} />
+              <span style={{ fontFamily: 'var(--font-data)', fontSize: 10, color: 'rgba(255,255,255,0.28)', letterSpacing: '0.14em' }}>SYSTEMS OPERATIONAL</span>
+            </div>
+          </div>
+
+          {/* Nav columns */}
+          {COLS.map(col => (
+            <div key={col.label}>
+              <span style={{ fontFamily: 'var(--font-data)', fontSize: 9, letterSpacing: '0.20em', color: 'rgba(255,255,255,0.28)', display: 'block', marginBottom: 14 }}>
+                {col.label.toUpperCase()}
+              </span>
+              <ul className="flex flex-col gap-2.5">
+                {col.links.map(l => (
+                  <li key={l.label}>
+                    <Link
+                      to={l.to}
+                      style={{ fontFamily: 'var(--font-body)', fontSize: 13, color: 'rgba(255,255,255,0.45)', textDecoration: 'none', transition: 'color 0.15s' }}
+                      onMouseEnter={e => { e.currentTarget.style.color = '#fff' }}
+                      onMouseLeave={e => { e.currentTarget.style.color = 'rgba(255,255,255,0.45)' }}
+                    >
+                      {l.label}
+                    </Link>
+                  </li>
+                ))}
+              </ul>
             </div>
           ))}
         </div>
 
-        <div className="border-t px-6 py-4 max-w-[1440px] mx-auto flex items-center justify-between gap-4 flex-wrap" style={{ borderColor: 'rgba(255,255,255,0.05)' }}>
-          <p style={{ fontFamily: 'var(--font-data)', fontSize: 9, color: 'rgba(255,255,255,0.18)', letterSpacing: '0.08em' }}>
-            © 2025 Apex Decision Engine · For informational use only · Past performance ≠ future results
-          </p>
-          <div className="flex items-center gap-1.5">
-            <Circle size={4} fill="var(--color-profit)" style={{ color: 'var(--color-profit)' }} className="animate-pulse" />
-            <span style={{ fontFamily: 'var(--font-data)', fontSize: 8, color: 'rgba(255,255,255,0.20)', letterSpacing: '0.10em' }}>
-              System Operational
-            </span>
-          </div>
+        <div
+          style={{ borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: 24, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}
+        >
+          <span style={{ fontFamily: 'var(--font-data)', fontSize: 10, color: 'rgba(255,255,255,0.20)', letterSpacing: '0.12em' }}>
+            © 2025 APEX DECISION ENGINE. NOT FINANCIAL ADVICE.
+          </span>
+          <span style={{ fontFamily: 'var(--font-data)', fontSize: 10, color: 'rgba(255,255,255,0.15)', letterSpacing: '0.10em' }}>
+            v2.0.0 · POWERED BY CLAUDE AI
+          </span>
         </div>
-      </footer>
-    </PageWrapper>
+      </div>
+    </footer>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ROOT EXPORT
+// ─────────────────────────────────────────────────────────────────────────────
+export default function Landing() {
+  return (
+    <div style={{ background: 'var(--bg-void)', overflowX: 'hidden' }}>
+      <HeroSection />
+      <StatsStrip />
+      <IntelligenceSection />
+      <ShaderDivider />
+      <PlatformPreview />
+      <BentoFeatures />
+      <PricingSection />
+      <CtaSection />
+      <Footer />
+    </div>
   )
 }
