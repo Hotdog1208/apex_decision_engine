@@ -780,6 +780,7 @@ class AdminAskRequest(BaseModel):
     watchlist: List[str] = ["SPY", "QQQ", "NVDA"]
     session_id: str = "admin-session"
     admin_key: str = ""
+    aggression_level: int = 3
 
 
 @app.post("/admin/panel/ask")
@@ -812,6 +813,7 @@ async def admin_panel_ask(body: AdminAskRequest) -> Dict[str, Any]:
         signals=signals,
         regime=regime,
         history=history,
+        aggression_level=max(1, min(5, body.aggression_level)),
     )
     chat_engine._add_to_history(body.session_id, "user", question)
     chat_engine._add_to_history(body.session_id, "assistant", reply)

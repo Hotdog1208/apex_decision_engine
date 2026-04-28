@@ -42,6 +42,61 @@ const VERDICT_COLOR = {
   AVOID: C.red, STRONG_AVOID: C.red,
 }
 
+const AGGRESSION_LEVELS = [
+  { level: 1, label: 'CONSERVATIVE', short: 'CNSV', color: '#22C55E' },
+  { level: 2, label: 'MODERATE',     short: 'MOD',  color: '#84CC16' },
+  { level: 3, label: 'BALANCED',     short: 'BALN', color: '#EAB308' },
+  { level: 4, label: 'AGGRESSIVE',   short: 'AGGR', color: '#F97316' },
+  { level: 5, label: 'APEX',         short: 'APEX', color: '#EF4444' },
+]
+
+const FIELD_ACCENT = {
+  'INSTRUMENT':    '#FFFFFF',
+  'CURRENT PRICE': '#00D4FF',
+  'ENTRY ZONE':    '#CCFF00',
+  'TARGET':        '#22C55E',
+  'STOP-LOSS':     '#EF4444',
+  'TIME HORIZON':  '#F59E0B',
+  'RISK/REWARD':   'rgba(255,255,255,0.50)',
+  'AGGRESSION NOTE': 'rgba(255,255,255,0.25)',
+}
+
+// ── Aggression selector ───────────────────────────────────────────────────────
+function AggressionSelector({ value, onChange }) {
+  return (
+    <div style={{ display: 'flex', gap: 3, alignItems: 'center' }}>
+      {AGGRESSION_LEVELS.map(({ level, label, short, color }) => {
+        const active = value === level
+        const isApex = level === 5
+        return (
+          <button
+            key={level}
+            onClick={() => onChange(level)}
+            title={label}
+            style={{
+              fontFamily: C.mono,
+              fontSize: '8px',
+              letterSpacing: '0.10em',
+              textTransform: 'uppercase',
+              padding: '4px 8px',
+              background: active ? `${color}22` : 'transparent',
+              color: active ? color : C.dim,
+              border: `1px solid ${active ? color + '55' : C.border}`,
+              cursor: 'pointer',
+              transition: 'all 0.15s',
+              animation: isApex && active ? 'adeApexPulse 2s ease-in-out infinite' : 'none',
+            }}
+            onMouseEnter={e => { if (!active) { e.currentTarget.style.color = color; e.currentTarget.style.borderColor = color + '33' } }}
+            onMouseLeave={e => { if (!active) { e.currentTarget.style.color = C.dim; e.currentTarget.style.borderColor = C.border } }}
+          >
+            {short}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
 // ── API ───────────────────────────────────────────────────────────────────────
 async function adminJson(path, method = 'GET', body = null, key = '') {
   let url = `${API_BASE}${path}`
@@ -472,13 +527,30 @@ function ChatMessage({ msg }) {
         <span style={{ fontFamily: C.mono, fontSize: '9px', color: C.dim }}>{time}</span>
       </div>
       <div style={{ paddingLeft: 38 }}>
-        <Markdown text={msg.content} />
+        <CipherOutputRenderer text={msg.content} />
       </div>
     </div>
   )
 }
 
-function TypingDots() {
+const THINKING_STAGES = [
+  { delay: 0,     text: 'Scanning market conditions...' },
+  { delay: 4000,  text: 'Searching for catalysts...' },
+  { delay: 9000,  text: 'Fetching live prices...' },
+  { delay: 16000, text: 'Analyzing trade setups...' },
+  { delay: 26000, text: 'Composing intelligence...' },
+]
+
+function ThinkingIndicator() {
+  const [stageIdx, setStageIdx] = useState(0)
+
+  useEffect(() => {
+    const timers = THINKING_STAGES.slice(1).map((s, i) =>
+      setTimeout(() => setStageIdx(i + 1), s.delay)
+    )
+    return () => timers.forEach(clearTimeout)
+  }, [])
+
   return (
     <div style={{ marginBottom: 24, padding: '0 28px' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
@@ -487,11 +559,118 @@ function TypingDots() {
         </div>
         <span style={{ fontFamily: C.mono, fontSize: '9px', fontWeight: 700, color: C.cyan, letterSpacing: '0.14em', textTransform: 'uppercase' }}>CIPHER</span>
       </div>
-      <div style={{ paddingLeft: 38, display: 'flex', alignItems: 'center', gap: 5, height: 20 }}>
-        {[0, 1, 2].map(i => (
-          <span key={i} style={{ width: 7, height: 7, borderRadius: '50%', background: C.cyan + '55', display: 'inline-block', animation: `adeAdminBounce 1.3s ease-in-out ${i * 0.18}s infinite` }} />
-        ))}
+      <div style={{ paddingLeft: 38, display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span style={{ fontSize: '11px' }}>⚡</span>
+        <span style={{ fontFamily: C.mono, fontSize: '10px', color: C.dim, transition: 'opacity 0.4s' }}>{THINKING_STAGES[stageIdx].text}</span>
+        <span style={{ display: 'flex', gap: 4, marginLeft: 4 }}>
+          {[0, 1, 2].map(i => (
+            <span key={i} style={{ width: 4, height: 4, borderRadius: '50%', background: C.cyan + '55', display: 'inline-block', animation: `adeAdminBounce 1.3s ease-in-out ${i * 0.18}s infinite` }} />
+          ))}
+        </span>
       </div>
+    </div>
+  )
+}
+
+// ── Trade cards (structured CIPHER output) ────────────────────────────────────
+function parseTrades(text) {
+  if (!text.includes('═══')) return null
+  const sections = text.split(/^═{5,}.*$/m).filter(s => s.trim())
+  const trades = sections.filter(s => /TRADE\s+\d+/i.test(s.trim()))
+  if (!trades.length) return null
+
+  return trades.map(block => {
+    const lines = block.split('\n')
+    const trade = { title: '', symbol: '', strategy: '', fields: [], prose: [] }
+    let proseSection = null
+
+    for (const line of lines) {
+      const t = line.trim()
+      if (!t || /^━{5,}/.test(t)) continue
+
+      if (!trade.symbol) {
+        const m = t.match(/^TRADE\s+\d+:\s*([A-Z0-9.]+)\s*[—–-]+\s*(.+)/i)
+        if (m) { trade.title = t; trade.symbol = m[1]; trade.strategy = m[2].trim(); continue }
+      }
+
+      const fm = t.match(/^▸\s+([A-Z][A-Z\s\/]+?):\s*(.+)/)
+      if (fm) { trade.fields.push({ key: fm[1].trim(), val: fm[2].trim() }); proseSection = null; continue }
+
+      // Named prose section header (all-caps line ending with :)
+      const sh = t.match(/^([A-Z][A-Z\s]{4,}):?\s*$/)
+      if (sh && !t.startsWith('▸')) { proseSection = sh[1].trim(); continue }
+
+      if (t) trade.prose.push({ section: proseSection, text: t })
+    }
+
+    return trade
+  })
+}
+
+function TradeCard({ trade, index }) {
+  const groupedProse = []
+  let last = null
+  for (const { section, text } of trade.prose) {
+    if (!last || last.section !== section) { last = { section, lines: [] }; groupedProse.push(last) }
+    last.lines.push(text)
+  }
+
+  return (
+    <div style={{ background: C.panel, border: `1px solid ${C.border}`, marginBottom: 10 }}>
+      <div style={{ padding: '12px 18px', borderBottom: `1px solid ${C.border}`, background: 'rgba(0,212,255,0.04)' }}>
+        <div style={{ fontFamily: C.mono, fontSize: '7px', color: C.dim, letterSpacing: '0.18em', textTransform: 'uppercase', marginBottom: 4 }}>TRADE {index + 1}</div>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' }}>
+          <span style={{ fontFamily: C.mono, fontSize: '20px', fontWeight: 900, color: C.bright, letterSpacing: '-0.01em' }}>{trade.symbol}</span>
+          <span style={{ fontFamily: C.sans, fontSize: '11px', color: C.mid }}>{trade.strategy}</span>
+        </div>
+      </div>
+
+      {trade.fields.length > 0 && (
+        <div style={{ padding: '12px 18px', borderBottom: groupedProse.length ? `1px solid ${C.border}` : 'none' }}>
+          {trade.fields.map(({ key, val }) => (
+            <div key={key} style={{ display: 'flex', gap: 10, marginBottom: 6, alignItems: 'flex-start' }}>
+              <span style={{ fontFamily: C.mono, fontSize: '7px', color: C.dim, letterSpacing: '0.12em', textTransform: 'uppercase', width: 112, flexShrink: 0, paddingTop: 3, lineHeight: 1.5 }}>{key}</span>
+              <span style={{ fontFamily: C.mono, fontSize: '11px', color: FIELD_ACCENT[key] || C.text, lineHeight: 1.5 }}>{val}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {groupedProse.length > 0 && (
+        <div style={{ padding: '12px 18px' }}>
+          {groupedProse.map(({ section, lines }, gi) => (
+            <div key={gi} style={{ marginBottom: gi < groupedProse.length - 1 ? 10 : 0 }}>
+              {section && (
+                <div style={{ fontFamily: C.mono, fontSize: '7px', color: C.dim, letterSpacing: '0.16em', textTransform: 'uppercase', marginBottom: 4 }}>{section}</div>
+              )}
+              {lines.map((ln, li) => (
+                <p key={li} style={{ fontFamily: C.sans, fontSize: '12px', color: C.text, lineHeight: 1.7, margin: '0 0 2px' }}>{ln}</p>
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function CipherOutputRenderer({ text }) {
+  if (!text) return null
+  const trades = parseTrades(text)
+  if (!trades) return <Markdown text={text} />
+
+  const firstSep = text.indexOf('═══')
+  const preamble = firstSep > 0 ? text.slice(0, firstSep).trim() : ''
+  const postMatch = text.match(/\*This is intelligence[^*]+\*\s*$/)
+  const postamble = postMatch ? postMatch[0].replace(/\*/g, '') : ''
+
+  return (
+    <div>
+      {preamble && <div style={{ marginBottom: 14 }}><Markdown text={preamble} /></div>}
+      {trades.map((trade, i) => <TradeCard key={i} trade={trade} index={i} />)}
+      {postamble && (
+        <p style={{ fontFamily: C.sans, fontSize: '11px', color: C.dim, fontStyle: 'italic', marginTop: 12 }}>{postamble}</p>
+      )}
     </div>
   )
 }
@@ -510,9 +689,18 @@ function ChatTab({ adminKey }) {
   const [err, setErr] = useState('')
   const [watchlist, setWatchlist] = useState('SPY, QQQ, NVDA')
   const [showCtx, setShowCtx] = useState(false)
+  const [aggression, setAggression] = useState(() => {
+    const saved = localStorage.getItem('cipher_aggression')
+    return saved ? Math.max(1, Math.min(5, parseInt(saved, 10))) : 3
+  })
   const bottomRef = useRef(null)
   const inputRef = useRef(null)
   const textareaRef = useRef(null)
+
+  const setAggressionPersist = (v) => {
+    setAggression(v)
+    localStorage.setItem('cipher_aggression', String(v))
+  }
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -531,7 +719,7 @@ function ChatTab({ adminKey }) {
     setLoading(true)
 
     try {
-      const data = await adminJson('/admin/panel/ask', 'POST', { question: q, watchlist: wl, session_id: 'admin-session' }, adminKey)
+      const data = await adminJson('/admin/panel/ask', 'POST', { question: q, watchlist: wl, session_id: 'admin-session', aggression_level: aggression }, adminKey)
       setMessages([...updated, { role: 'assistant', content: data.reply, ts: new Date().toISOString() }])
     } catch (e) {
       setErr(e.message)
@@ -557,13 +745,15 @@ function ChatTab({ adminKey }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
       {/* Header */}
-      <div style={{ padding: '14px 28px', borderBottom: `1px solid ${C.border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
+      <div style={{ padding: '12px 28px', borderBottom: `1px solid ${C.border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0, flexWrap: 'wrap', gap: 10 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <span style={{ width: 8, height: 8, borderRadius: '50%', background: C.green, boxShadow: `0 0 8px ${C.green}`, flexShrink: 0 }} />
           <span style={{ fontFamily: C.mono, fontSize: '10px', fontWeight: 700, color: C.bright, letterSpacing: '0.12em', textTransform: 'uppercase' }}>CIPHER</span>
-          <span style={{ fontFamily: C.mono, fontSize: '9px', color: C.dim }}>admin mode · apex tier · no rate limits</span>
+          <span style={{ fontFamily: C.mono, fontSize: '9px', color: C.dim, display: 'none' }}>admin mode</span>
         </div>
-        <div style={{ display: 'flex', gap: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <AggressionSelector value={aggression} onChange={setAggressionPersist} />
+          <div style={{ width: 1, height: 18, background: C.border }} />
           <button onClick={() => setShowCtx(o => !o)} style={{ fontFamily: C.mono, fontSize: '9px', color: showCtx ? C.bright : C.dim, background: showCtx ? 'rgba(255,255,255,0.06)' : 'transparent', border: `1px solid ${showCtx ? C.borderFocus : C.border}`, padding: '5px 12px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 5, letterSpacing: '0.10em', textTransform: 'uppercase', transition: 'all 0.15s' }}>
             <Settings size={10} /> Context {showCtx ? <ChevronUp size={9} /> : <ChevronDown size={9} />}
           </button>
@@ -617,7 +807,7 @@ function ChatTab({ adminKey }) {
         )}
 
         {messages.map((msg, i) => <ChatMessage key={i} msg={msg} />)}
-        {loading && <TypingDots />}
+        {loading && <ThinkingIndicator />}
         {err && (
           <div style={{ margin: '0 28px 20px', padding: '10px 14px', background: `${C.red}10`, border: `1px solid ${C.red}30`, color: C.red, fontFamily: C.mono, fontSize: '11px' }}>
             {err}
@@ -800,6 +990,10 @@ export default function AdminDashboard() {
         @keyframes adeAdminSpin {
           from { transform: rotate(0deg); }
           to   { transform: rotate(360deg); }
+        }
+        @keyframes adeApexPulse {
+          0%, 100% { box-shadow: 0 0 6px #EF444440; }
+          50%       { box-shadow: 0 0 18px #EF444470; }
         }
         /* Reset the global cursor:none that index.css applies to body/buttons/inputs */
         .ade-admin-root,
