@@ -39,6 +39,7 @@ const AuthCallback    = lazy(() => import('./pages/AuthCallback'))
 const Account         = lazy(() => import('./pages/Account'))
 const Pricing         = lazy(() => import('./pages/Pricing'))
 const Agent           = lazy(() => import('./pages/Agent'))
+const TradeLog        = lazy(() => import('./pages/TradeLog'))
 const NotFound        = lazy(() => import('./pages/NotFound'))
 const AdminDashboard  = lazy(() => import('./pages/AdminDashboard'))
 
@@ -52,7 +53,7 @@ import { AuthProvider, useAuth } from './context/AuthContext'
 import { Toaster } from 'react-hot-toast'
 import {
   Command, LayoutDashboard, BarChart2, Activity, ChevronDown,
-  LogOut, HelpCircle, Award, Menu, X, Circle, Bot,
+  LogOut, HelpCircle, Award, Menu, X, Circle, Bot, ScrollText,
 } from 'lucide-react'
 
 const isMac = typeof navigator !== 'undefined' && /Mac|iPod|iPhone|iPad/.test(navigator.platform)
@@ -62,7 +63,8 @@ const NAV_ITEMS = [
   { to: '/dashboard',    label: 'Signals',      icon: LayoutDashboard },
   { to: '/charts',       label: 'Charts',        icon: BarChart2       },
   { to: '/track-record', label: 'Track Record',  icon: Award           },
-  { to: '/agent',        label: 'CIPHER',        icon: Bot, apexOnly: true },
+  { to: '/agent',        label: 'CIPHER',        icon: Bot,        apexOnly: true },
+  { to: '/logs',         label: 'Trade Log',     icon: ScrollText, apexOnly: true },
 ]
 
 const TIER_STYLE = {
@@ -496,6 +498,7 @@ const PAGE_TITLES = {
   '/disclaimer':     'Disclaimer | ADE',
   '/admin/performance': 'Performance | ADE',
   '/admin':             'Admin Console | ADE',
+  '/logs':              'Trade Log | ADE',
 }
 
 function TitleUpdater() {
@@ -536,6 +539,7 @@ function AnimatedRoutes() {
         <Route path="/track-record" element={<PrivateRoute><TrackRecord /></PrivateRoute>} />
         <Route path="/chat"         element={<PrivateRoute><Chat /></PrivateRoute>} />
         <Route path="/agent"        element={<PrivateRoute><Agent /></PrivateRoute>} />
+        <Route path="/logs"         element={<PrivateRoute><TradeLog /></PrivateRoute>} />
         <Route path="/account"      element={<PrivateRoute><Account /></PrivateRoute>} />
         <Route path="/admin/performance" element={<PrivateRoute><PerformancePage /></PrivateRoute>} />
         <Route path="/admin"            element={<AdminDashboard />} />

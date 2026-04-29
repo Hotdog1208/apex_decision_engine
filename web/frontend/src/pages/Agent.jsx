@@ -1,11 +1,14 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Mic, MicOff, Volume2, VolumeX, RefreshCw, Send, Zap, Clock, Settings } from 'lucide-react'
+import { Mic, MicOff, Volume2, VolumeX, RefreshCw, Send, Zap, Clock, Settings, TrendingUp } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import UpgradePrompt from '../components/UpgradePrompt'
 import ApexOnboarding from '../components/ApexOnboarding'
 import { api } from '../api'
 import toast from 'react-hot-toast'
+
+const AGG_LABELS = { 1: 'CNSV', 2: 'BAL', 3: 'STD', 4: 'AGG', 5: 'APEX' }
+const AGG_COLORS = { 1: '#00D4FF', 2: '#7DE8A0', 3: '#CCFF00', 4: '#FFB800', 5: '#FF4444' }
 
 // ── Simple inline markdown renderer ─────────────────────────────────────────
 function BriefLine({ line }) {
@@ -120,6 +123,9 @@ export default function Agent() {
   const [prefs, setPrefs]                 = useState(null)
   const [onboardingOpen, setOnboardingOpen] = useState(false)
   const [sessionId]                       = useState(() => `cipher-${Date.now()}`)
+  const [aggressionLevel, setAggressionLevel] = useState(3)
+  const [cipherStats, setCipherStats]     = useState(null)
+  const [pendingPositions, setPendingPositions] = useState([])
   const chatEndRef                        = useRef(null)
   const recRef                            = useRef(null)
   const { speak, stop } = useSpeech(voiceEnabled)
@@ -140,9 +146,11 @@ export default function Agent() {
     const init = async () => {
       setLoading(true)
       try {
-        const [briefData, prefsData] = await Promise.all([
+        const [briefData, prefsData, statsData, pendingData] = await Promise.all([
           api.getAgentBrief(),
           api.getAgentPreferences(),
+          api.getCipherStats().catch(() => null),
+          api.getPendingPositions().catch(() => []),
         ])
         if (cancelled) return
         if (briefData?.brief) {
@@ -151,6 +159,8 @@ export default function Agent() {
         }
         setPrefs(prefsData)
         setVoiceEnabled(prefsData?.voice_mode || false)
+        if (statsData) setCipherStats(statsData)
+        setPendingPositions(pendingData || [])
         // Show onboarding if not complete
         if (!prefsData?.onboarding_complete) {
           setOnboardingOpen(true)
@@ -200,7 +210,7 @@ export default function Agent() {
     setAskLoading(true)
     setConversation(prev => [...prev, { role: 'user', content: question }])
     try {
-      const res = await api.askAgent(question, sessionId)
+      const res = await api.askAgent(question, sessionId, aggressionLevel)
       setConversation(prev => [...prev, { role: 'cipher', content: res.reply }])
       if (voiceEnabled) speak(res.reply)
     } catch (err) {
@@ -264,6 +274,18 @@ export default function Agent() {
             }}>
               CIPHER · APEX AGENT · ONLINE
             </span>
+            {cipherStats?.show_badge && (
+              <span style={{
+                display: 'flex', alignItems: 'center', gap: '5px',
+                fontFamily: 'var(--font-data, monospace)', fontSize: '8px',
+                letterSpacing: '0.14em', textTransform: 'uppercase', fontWeight: 700,
+                background: 'rgba(204,255,0,0.10)', color: '#CCFF00',
+                border: '1px solid rgba(204,255,0,0.25)', padding: '2px 8px',
+              }}>
+                <TrendingUp size={9} />
+                {cipherStats.win_rate}% WIN RATE
+              </span>
+            )}
           </div>
           <h1 style={{
             fontFamily: 'var(--font-display, sans-serif)', fontSize: '28px',
@@ -302,6 +324,29 @@ export default function Agent() {
             }}>
             <Settings size={14} />
           </button>
+
+          {/* Aggression selector */}
+          <div className="flex items-center" style={{ border: '1px solid rgba(255,255,255,0.08)', background: 'rgba(255,255,255,0.02)' }}
+            title="CIPHER aggression level">
+            {[1, 2, 3, 4, 5].map(lvl => (
+              <button
+                key={lvl}
+                onClick={() => setAggressionLevel(lvl)}
+                style={{
+                  padding: '7px 10px',
+                  background: aggressionLevel === lvl ? `${AGG_COLORS[lvl]}18` : 'transparent',
+                  color: aggressionLevel === lvl ? AGG_COLORS[lvl] : 'rgba(255,255,255,0.22)',
+                  border: 'none', borderRight: lvl < 5 ? '1px solid rgba(255,255,255,0.06)' : 'none',
+                  fontFamily: 'var(--font-data, monospace)', fontSize: '8px', fontWeight: 700,
+                  letterSpacing: '0.10em', cursor: 'pointer',
+                  transition: 'color 0.15s, background 0.15s',
+                }}
+                title={`L${lvl}: ${AGG_LABELS[lvl]}`}
+              >
+                L{lvl}
+              </button>
+            ))}
+          </div>
 
           {/* Generate brief */}
           <button
@@ -464,6 +509,30 @@ export default function Agent() {
                 )}
                 <div ref={chatEndRef} />
               </div>
+
+              {/* Pending positions reminder */}
+              {pendingPositions.length > 0 && (
+                <div className="flex items-center gap-2 px-4 py-2 overflow-x-auto"
+                  style={{ flexShrink: 0, borderTop: '1px solid rgba(255,255,255,0.05)', background: 'rgba(255,184,0,0.03)' }}>
+                  <span style={{
+                    fontFamily: 'var(--font-data, monospace)', fontSize: '7px',
+                    letterSpacing: '0.14em', color: 'rgba(255,184,0,0.50)',
+                    textTransform: 'uppercase', flexShrink: 0,
+                  }}>
+                    OPEN:
+                  </span>
+                  {pendingPositions.slice(0, 6).map(p => (
+                    <span key={p.id} style={{
+                      fontFamily: 'var(--font-data, monospace)', fontSize: '8px',
+                      letterSpacing: '0.08em', color: '#FFB800',
+                      background: 'rgba(255,184,0,0.08)', border: '1px solid rgba(255,184,0,0.20)',
+                      padding: '2px 8px', flexShrink: 0, whiteSpace: 'nowrap', cursor: 'default',
+                    }} title={p.instrument_description}>
+                      {p.ticker} · {p.strategy_type}
+                    </span>
+                  ))}
+                </div>
+              )}
 
               {/* Input */}
               <div className="px-4 pb-4 pt-3 flex gap-2 items-end" style={{ borderTop: '1px solid rgba(255,255,255,0.05)', flexShrink: 0 }}>

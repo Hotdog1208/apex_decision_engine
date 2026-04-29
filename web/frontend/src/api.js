@@ -66,6 +66,17 @@ async function putApi(path, body) {
   return res.json()
 }
 
+async function patchApi(path, body) {
+  const headers = { 'Content-Type': 'application/json', ...getAuthHeaders() }
+  const res = await fetch(`${API_BASE}${path}`, {
+    method: 'PATCH',
+    headers,
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) throw new Error(await parseErrorResponse(res))
+  return res.json()
+}
+
 async function deleteApi(path) {
   const res = await fetch(`${API_BASE}${path}`, { method: 'DELETE', headers: getAuthHeaders() })
   if (!res.ok) throw new Error(await parseErrorResponse(res))
@@ -156,8 +167,20 @@ export const api = {
   saveAgentPreferences: (prefs) => postApi('/agent/preferences', prefs),
   getAgentBrief: () => fetchApi('/agent/brief'),
   generateAgentBrief: () => postApi('/agent/brief/generate', {}),
-  askAgent: (question, sessionId = 'cipher-default') =>
-    postApi('/agent/ask', { question, session_id: sessionId }),
+  askAgent: (question, sessionId = 'cipher-default', aggressionLevel = 3) =>
+    postApi('/agent/ask', { question, session_id: sessionId, aggression_level: aggressionLevel }),
+
+  // CIPHER Trade Log
+  getCipherTradeLog: (status = 'all', aggression = 0, limit = 200) => {
+    const params = new URLSearchParams({ limit })
+    if (status && status !== 'all') params.set('status', status)
+    if (aggression && aggression !== 0) params.set('aggression_level', aggression)
+    return fetchApi('/cipher/trade-log?' + params.toString())
+  },
+  updateCipherTrade: (tradeId, updates) =>
+    patchApi(`/cipher/trade-log/${encodeURIComponent(tradeId)}`, updates),
+  getCipherStats: () => fetchApi('/cipher/trade-log/stats'),
+  getPendingPositions: () => fetchApi('/cipher/pending-positions'),
 }
 
 export function useWebSocket(onMessage) {
