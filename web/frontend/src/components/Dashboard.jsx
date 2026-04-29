@@ -21,6 +21,131 @@ import UpgradePrompt from './UpgradePrompt'
 const easing = [0.16, 1, 0.3, 1]
 const MAX_WATCHLIST = 20
 
+const AGG_COLORS_DASH = { 1: '#00D4FF', 2: '#7DE8A0', 3: '#CCFF00', 4: '#FFB800', 5: '#FF4444' }
+
+function CipherPerfWidget() {
+  const [stats, setStats] = useState(null)
+  useEffect(() => {
+    api.getCipherStats().then(setStats).catch(() => {})
+  }, [])
+
+  if (!stats || (!stats.total_closed && !stats.total_pending)) return null
+
+  const { win_rate, total_closed, total_wins, total_losses, total_pending, by_level, best_trade, worst_trade } = stats
+  const maxByLevel = Math.max(1, ...Object.values(by_level || {}).map(v => (v.wins || 0) + (v.losses || 0)))
+
+  // SVG donut
+  const r = 28, cx = 36, cy = 36, stroke = 7
+  const circ = 2 * Math.PI * r
+  const winArc = total_closed > 0 ? (total_wins / total_closed) * circ : 0
+
+  return (
+    <div style={{ background: 'rgba(204,255,0,0.02)', border: '1px solid rgba(204,255,0,0.10)', padding: '20px 24px', marginTop: '32px' }}>
+      <div className="flex items-center gap-2 mb-5">
+        <span style={{ fontFamily: 'var(--font-data, monospace)', fontSize: '8px', letterSpacing: '0.22em', textTransform: 'uppercase', color: '#CCFF00', fontWeight: 700 }}>
+          CIPHER Performance
+        </span>
+        {total_pending > 0 && (
+          <span style={{ fontFamily: 'var(--font-data, monospace)', fontSize: '7px', letterSpacing: '0.12em', color: '#FFB800', background: 'rgba(255,184,0,0.08)', border: '1px solid rgba(255,184,0,0.20)', padding: '1px 6px' }}>
+            {total_pending} OPEN
+          </span>
+        )}
+      </div>
+
+      <div className="grid gap-6" style={{ gridTemplateColumns: 'auto 1fr auto' }}>
+        {/* Donut */}
+        <div className="flex flex-col items-center justify-center gap-1">
+          <svg width={72} height={72}>
+            <circle cx={cx} cy={cy} r={r} fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth={stroke} />
+            {total_closed > 0 && (
+              <circle
+                cx={cx} cy={cy} r={r} fill="none"
+                stroke="#CCFF00" strokeWidth={stroke}
+                strokeDasharray={`${winArc} ${circ}`}
+                strokeLinecap="butt"
+                transform={`rotate(-90 ${cx} ${cy})`}
+                style={{ transition: 'stroke-dasharray 0.6s ease' }}
+              />
+            )}
+            <text x={cx} y={cy + 1} textAnchor="middle" dominantBaseline="middle"
+              style={{ fontFamily: 'var(--font-data, monospace)', fontSize: '11px', fontWeight: 700, fill: '#CCFF00' }}>
+              {win_rate}%
+            </text>
+          </svg>
+          <span style={{ fontFamily: 'var(--font-data, monospace)', fontSize: '7px', letterSpacing: '0.14em', color: 'rgba(255,255,255,0.30)', textTransform: 'uppercase' }}>
+            Win Rate
+          </span>
+        </div>
+
+        {/* By-level bars */}
+        <div className="flex flex-col justify-center gap-1.5">
+          {[1, 2, 3, 4, 5].map(lvl => {
+            const d = by_level?.[lvl] || { wins: 0, losses: 0 }
+            const total = (d.wins || 0) + (d.losses || 0)
+            const winPct = total > 0 ? ((d.wins / total) * 100).toFixed(0) : null
+            const barW = total > 0 ? Math.max(4, Math.round((total / maxByLevel) * 100)) : 0
+            return (
+              <div key={lvl} className="flex items-center gap-2">
+                <span style={{ fontFamily: 'var(--font-data, monospace)', fontSize: '7px', color: AGG_COLORS_DASH[lvl], letterSpacing: '0.08em', width: '16px', flexShrink: 0 }}>L{lvl}</span>
+                <div style={{ flex: 1, height: '4px', background: 'rgba(255,255,255,0.06)', position: 'relative' }}>
+                  {barW > 0 && (
+                    <div style={{ position: 'absolute', inset: 0, width: `${barW}%`, background: AGG_COLORS_DASH[lvl], opacity: 0.6 }} />
+                  )}
+                </div>
+                <span style={{ fontFamily: 'var(--font-data, monospace)', fontSize: '7px', color: 'rgba(255,255,255,0.35)', width: '32px', flexShrink: 0, textAlign: 'right' }}>
+                  {total > 0 ? `${d.wins}W ${d.losses}L` : '—'}
+                </span>
+                {winPct !== null && (
+                  <span style={{ fontFamily: 'var(--font-data, monospace)', fontSize: '7px', color: AGG_COLORS_DASH[lvl], width: '28px', flexShrink: 0 }}>{winPct}%</span>
+                )}
+              </div>
+            )
+          })}
+        </div>
+
+        {/* Best / worst */}
+        <div className="flex flex-col justify-center gap-3 pl-4" style={{ borderLeft: '1px solid rgba(255,255,255,0.06)' }}>
+          {best_trade && (
+            <div>
+              <div style={{ fontFamily: 'var(--font-data, monospace)', fontSize: '7px', color: 'rgba(0,232,121,0.55)', letterSpacing: '0.14em', textTransform: 'uppercase', marginBottom: '2px' }}>Best</div>
+              <div style={{ fontFamily: 'var(--font-data, monospace)', fontSize: '10px', color: '#00E879', fontWeight: 700 }}>
+                +{best_trade.pnl_percent?.toFixed(1)}%
+              </div>
+              <div style={{ fontFamily: 'var(--font-data, monospace)', fontSize: '8px', color: 'rgba(255,255,255,0.35)' }}>{best_trade.ticker}</div>
+            </div>
+          )}
+          {worst_trade && (
+            <div>
+              <div style={{ fontFamily: 'var(--font-data, monospace)', fontSize: '7px', color: 'rgba(255,32,82,0.55)', letterSpacing: '0.14em', textTransform: 'uppercase', marginBottom: '2px' }}>Worst</div>
+              <div style={{ fontFamily: 'var(--font-data, monospace)', fontSize: '10px', color: '#FF2052', fontWeight: 700 }}>
+                {worst_trade.pnl_percent?.toFixed(1)}%
+              </div>
+              <div style={{ fontFamily: 'var(--font-data, monospace)', fontSize: '8px', color: 'rgba(255,255,255,0.35)' }}>{worst_trade.ticker}</div>
+            </div>
+          )}
+          <Link to="/logs" style={{ fontFamily: 'var(--font-data, monospace)', fontSize: '7px', letterSpacing: '0.12em', textTransform: 'uppercase', color: '#CCFF00', opacity: 0.65, display: 'inline-block', marginTop: '4px' }}>
+            View Log →
+          </Link>
+        </div>
+      </div>
+
+      {/* Closed count */}
+      <div className="flex items-center gap-4 mt-4 pt-4" style={{ borderTop: '1px solid rgba(255,255,255,0.05)' }}>
+        {[
+          { label: 'Closed', value: total_closed, color: 'rgba(255,255,255,0.45)' },
+          { label: 'Wins',   value: total_wins,   color: '#00E879' },
+          { label: 'Losses', value: total_losses, color: '#FF2052' },
+        ].map(({ label, value, color }) => (
+          <div key={label} className="flex items-center gap-1.5">
+            <span style={{ fontFamily: 'var(--font-data, monospace)', fontSize: '14px', fontWeight: 700, color }}>{value}</span>
+            <span style={{ fontFamily: 'var(--font-data, monospace)', fontSize: '7px', color: 'rgba(255,255,255,0.25)', textTransform: 'uppercase', letterSpacing: '0.14em' }}>{label}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 const VERDICT_COLOR = {
   STRONG_BUY:   '#34D399',
   BUY:          '#00FF88',
@@ -683,6 +808,9 @@ export default function Dashboard() {
           </div>
         </div>
       </div>
+
+      {/* CIPHER performance widget — APEX only */}
+      {tier === 'apex' && <CipherPerfWidget />}
     </PageWrapper>
   )
 }

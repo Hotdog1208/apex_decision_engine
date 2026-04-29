@@ -211,12 +211,33 @@ export default function Agent() {
     setConversation(prev => [...prev, { role: 'user', content: question }])
     try {
       const res = await api.askAgent(question, sessionId, aggressionLevel)
-      setConversation(prev => [...prev, { role: 'cipher', content: res.reply }])
+      setConversation(prev => [...prev, {
+        role: 'cipher',
+        content: res.reply,
+        trade_ids: res.trade_ids || [],
+      }])
       if (voiceEnabled) speak(res.reply)
     } catch (err) {
       setConversation(prev => [...prev, { role: 'cipher', content: `Uplink error: ${err.message}` }])
     } finally {
       setAskLoading(false)
+    }
+  }
+
+  const handleQuickMark = async (tradeId, status) => {
+    try {
+      await api.updateCipherTrade(tradeId, { status })
+      setConversation(prev => prev.map(msg => ({
+        ...msg,
+        trade_ids: (msg.trade_ids || []).map(t =>
+          t.id === tradeId ? { ...t, _marked: status } : t
+        ),
+      })))
+      toast.success(`Trade marked as ${status.toUpperCase()}`)
+      api.getCipherStats().then(setCipherStats).catch(() => {})
+      api.getPendingPositions().then(setPendingPositions).catch(() => {})
+    } catch (err) {
+      toast.error('Could not update trade: ' + err.message)
     }
   }
 
@@ -484,7 +505,7 @@ export default function Agent() {
                   </div>
                 )}
                 {conversation.map((msg, i) => (
-                  <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                  <div key={i} className={`flex flex-col ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
                     <div style={{
                       maxWidth: '90%',
                       background: msg.role === 'user' ? 'rgba(204,255,0,0.08)' : 'rgba(255,255,255,0.04)',
@@ -499,6 +520,43 @@ export default function Agent() {
                         msg.content
                       )}
                     </div>
+                    {/* Quick mark buttons for logged trades */}
+                    {msg.role === 'cipher' && msg.trade_ids?.length > 0 && (
+                      <div className="flex flex-col gap-1 mt-1.5" style={{ maxWidth: '90%' }}>
+                        {msg.trade_ids.map(t => (
+                          <div key={t.id} className="flex items-center gap-1.5 flex-wrap"
+                            style={{ padding: '4px 8px', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)' }}>
+                            <span style={{ fontFamily: 'var(--font-data, monospace)', fontSize: '8px', color: '#CCFF00', letterSpacing: '0.10em', flexShrink: 0 }}>
+                              {t.ticker} · {t.strategy_type}
+                            </span>
+                            {t._marked ? (
+                              <span style={{
+                                fontFamily: 'var(--font-data, monospace)', fontSize: '8px', letterSpacing: '0.10em',
+                                color: t._marked === 'win' ? '#00E879' : t._marked === 'loss' ? '#FF2052' : 'rgba(255,255,255,0.35)',
+                                padding: '1px 6px', border: `1px solid ${t._marked === 'win' ? 'rgba(0,232,121,0.30)' : t._marked === 'loss' ? 'rgba(255,32,82,0.30)' : 'rgba(255,255,255,0.10)'}`,
+                              }}>
+                                {t._marked.toUpperCase()} ✓
+                              </span>
+                            ) : (
+                              <>
+                                <button onClick={() => handleQuickMark(t.id, 'win')}
+                                  style={{ fontFamily: 'var(--font-data, monospace)', fontSize: '8px', letterSpacing: '0.10em', cursor: 'pointer', padding: '1px 7px', background: 'rgba(0,232,121,0.08)', border: '1px solid rgba(0,232,121,0.25)', color: '#00E879' }}>
+                                  ✓ WIN
+                                </button>
+                                <button onClick={() => handleQuickMark(t.id, 'loss')}
+                                  style={{ fontFamily: 'var(--font-data, monospace)', fontSize: '8px', letterSpacing: '0.10em', cursor: 'pointer', padding: '1px 7px', background: 'rgba(255,32,82,0.08)', border: '1px solid rgba(255,32,82,0.25)', color: '#FF2052' }}>
+                                  ✗ LOSS
+                                </button>
+                                <button onClick={() => handleQuickMark(t.id, 'cancelled')}
+                                  style={{ fontFamily: 'var(--font-data, monospace)', fontSize: '8px', letterSpacing: '0.10em', cursor: 'pointer', padding: '1px 7px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.10)', color: 'rgba(255,255,255,0.35)' }}>
+                                  ✕ SKIP
+                                </button>
+                              </>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 ))}
                 {askLoading && (

@@ -1924,18 +1924,25 @@ async def agent_ask(
     chat_engine._add_to_history(body.session_id, "user", body.question)
     chat_engine._add_to_history(body.session_id, "assistant", reply)
 
-    # Auto-log parsed trades to cipher_trade_log (fire-and-forget)
+    # Auto-log parsed trades and collect IDs for quick-mark buttons in the UI.
+    trade_ids: List[Dict[str, Any]] = []
     if parsed_trades and user_id:
         from web.backend import signal_logger as _sl
-        async def _auto_log_trades():
-            for t in parsed_trades:
-                await _sl.log_cipher_trade(t, user_id, aggression_level, reply)
-        asyncio.create_task(_auto_log_trades())
+        results = await asyncio.gather(
+            *[_sl.log_cipher_trade(t, user_id, aggression_level, reply) for t in parsed_trades],
+            return_exceptions=True,
+        )
+        trade_ids = [
+            {"id": r, "ticker": parsed_trades[i].get("ticker", ""), "strategy_type": parsed_trades[i].get("strategy_type", "")}
+            for i, r in enumerate(results)
+            if isinstance(r, str)
+        ]
 
     return {
         "reply":          reply,
         "session_id":     body.session_id,
-        "trades_logged":  len(parsed_trades),
+        "trades_logged":  len(trade_ids),
+        "trade_ids":      trade_ids,
     }
 
 
