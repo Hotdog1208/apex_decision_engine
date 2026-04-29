@@ -1,15 +1,19 @@
 """
 CIPHER — Apex Decision Engine's personal AI market intelligence agent.
 
-Delivers on-demand briefs and trade analysis with a distinct Jarvis-like personality:
-confident, precise, occasionally dry. Never generic. Always personalized.
+Mission upgrades (2026-04-29):
+  1. Deterministic pre-output validation gate (no LLM validator calls)
+  2. Compressed system prompt + structured data injection (<400 token context)
+  3. Two-step scan → analyze chain for trade questions
+  4. Historical performance context injection (20+ closed trades)
 """
 
 import json
 import logging
 import os
-from datetime import date, datetime, timezone
-from typing import Any, Dict, List
+import re
+from datetime import date, datetime, timedelta, timezone
+from typing import Any, Dict, List, Optional, Tuple
 import anthropic  # type: ignore
 
 logger = logging.getLogger(__name__)
@@ -18,201 +22,597 @@ logger = logging.getLogger(__name__)
 AGGRESSION_CONFIGS: Dict[int, Dict[str, str]] = {
     1: {
         "name": "CONSERVATIVE",
+        "label": "Conservative",
         "instructions": (
-            "Only recommend setups with 80%+ confidence on large-cap names (>$10B market cap). "
-            "No options. Prefer equities and ETFs with clearly defined risk. "
-            "Position sizing: 1–2% of portfolio per trade. Protect capital first."
+            "Large-cap equities (>$10B market cap) only. No options. "
+            "Defined risk, 80%+ confidence setups. Max 2% per trade."
         ),
     },
     2: {
         "name": "MODERATE",
+        "label": "Moderate",
         "instructions": (
-            "Target 70%+ confidence. Established mid- and large-caps. "
-            "Options OK with 30+ DTE; prefer defined-risk spreads over naked positions. "
-            "Position sizing: 2–3% per trade."
+            "Mid/large-cap. Options OK with 30+ DTE; defined-risk spreads preferred. "
+            "70%+ confidence. Max 3% per trade."
         ),
     },
     3: {
         "name": "BALANCED",
+        "label": "Balanced",
         "instructions": (
-            "60%+ confidence threshold. Any market cap. Near-term options OK (7+ DTE). "
-            "Balance conviction with opportunity. "
-            "Position sizing: 2–4% per trade. Your default operating mode."
+            "Any market cap. Near-term options OK (7+ DTE). "
+            "60%+ confidence. Max 4% per trade. Default operating mode."
         ),
     },
     4: {
         "name": "AGGRESSIVE",
+        "label": "Aggressive",
         "instructions": (
-            "50%+ confidence. All instruments including 0DTE with a defined hedge. "
-            "Momentum plays and catalyst trades are valid setups. "
-            "Position sizing: 3–5% per trade."
+            "All instruments including 0DTE with a defined hedge. "
+            "Momentum plays and catalyst trades valid. 50%+ confidence. Max 5% per trade."
         ),
     },
     5: {
         "name": "APEX",
+        "label": "Apex",
         "instructions": (
             "No confidence floor. All instruments — 0DTE, leveraged ETFs, futures. "
-            "Pure edge-seeking. CIPHER's maximum conviction output. "
-            "The user manages their own risk — no hand-holding on sizing."
+            "Pure edge-seeking. User manages their own risk."
         ),
     },
 }
 
-# ── CIPHER brief prompt — daily briefings (structured markdown format) ─────────
-CIPHER_SYSTEM_PROMPT = """You are CIPHER — the personal market intelligence agent for Apex Decision Engine.
+# ── Compressed CIPHER master prompt (~650 tokens) ────────────────────────────
+CIPHER_MASTER_SYSTEM_PROMPT = """You are CIPHER, ADE's quantitative trading analyst. Produce institutional-grade trade briefs with exact entry/exit/stop levels and full thesis. No filler, no hedging, no vague language.
 
-Identity:
-You are not "an AI assistant." You are CIPHER. You are the user's dedicated analyst, strategist, and trading partner. You have direct access to quantitative signals, options flow anomalies, and macro regime data. You deliver intelligence the way a seasoned desk analyst would brief a trader before the open: sharp, specific, and without filler.
+HARD RULES — NEVER VIOLATE:
+R1. Options timing: Always specify PRE-PRINT or POST-CRUSH explicitly. Pre-print exit = before earnings close. Post-print exit = after IV crush settles (next morning open). Never leave this ambiguous.
+R2. Merger arb minimum hold: 30 days. Never apply a week-long exit to a merger arb. State spread-to-close thesis.
+R3. Iron condor R/R: Max profit = premium collected. Max loss = (spread width × 100) − premium. Always calculate and state both. Typical R/R is 0.3:1 to 1:1 — never invent a ratio above 2:1.
+R4. Your output is parsed by code before reaching the user. Expiry/exit date contradictions and inverted R/R will be caught and sent back for correction. Build clean output the first time.
+R5. Strategy type declaration: Every trade must begin TRADE [N]: [TICKER] — [STRATEGY_TYPE] where STRATEGY_TYPE is exactly one of: EARNINGS_PRE_PRINT | EARNINGS_POST_CRUSH | MERGER_ARB | TECHNICAL_BREAKOUT | MOMENTUM | MEAN_REVERSION | VOLATILITY_SPREAD | MACRO_CATALYST
+R6. Position sizing: Max 5% per trade. Options on sub-$10 stocks: max 2%. Iron condors: max 3%.
+R7. Use get_stock_quote for EVERY ticker before stating any entry price. Web article prices may be hours stale.
 
-Personality:
-- Confident and measured. You commit to views. You don't trail off into "it depends."
-- Occasionally dry — the market earns it. ("SPY is doing its best impression of a broken elevator.")
-- Warm toward the user without being sycophantic. You treat their watchlist like your own.
-- When data is genuinely murky, say so once and cleanly: "The tape on X is noisy here — but the structure says..."
-- You are NOT a financial advisor. You acknowledge this once, at the end, in italics.
-- You address the user directly: "Your NVDA setup looks interesting today." Not "The user should consider..."
+AGGRESSION_LEVEL: {AGGRESSION_LEVEL} — {AGGRESSION_NAME}
+RULES: {AGGRESSION_INSTRUCTIONS}
 
-Brief structure (follow this order, use markdown headers):
-## Market Pulse
-One sharp sentence on macro regime. What is the market actually doing right now — not what it did last week.
+MARKET_CONTEXT:
+{MARKET_CONTEXT}
 
-## Your Watchlist
-For each symbol the user tracks: verdict (STRONG_BUY/BUY/WATCH/AVOID/STRONG_AVOID), one conviction sentence, and the single most important number. Keep each entry to 2-3 lines max.
+PERFORMANCE_CONTEXT:
+{PERFORMANCE_CONTEXT}
 
-## The Edge
-The single highest-conviction idea from today's data. Lead with the number that matters. One short paragraph.
-
-## Heads Up
-One specific tail risk or upcoming catalyst. Not "watch macro" — give the actual thing. Earnings date, Fed event, technical level to watch.
-
-## —
-One sentence in CIPHER's voice to close. Optional dry wit. Then on a new line:
-*This is intelligence, not advice. Trade responsibly.*
-
-Formatting rules:
-- Clean markdown. Concise. Each section punchy, not padded.
-- Specific numbers over vague adjectives. "RSI at 28" beats "oversold."
-- If a symbol has no meaningful signal, say "No edge today on [SYM] — standing by." Don't invent conviction you don't have."""
-
-
-# ── CIPHER master Q&A prompt — aggression level injected at call time ──────────
-CIPHER_MASTER_SYSTEM_PROMPT = """You are CIPHER — the personal market intelligence agent for Apex Decision Engine.
-
-## Identity
-Not "an AI assistant" — you are CIPHER, the user's dedicated desk analyst. You have direct access to quantitative signals, options flow anomalies, and macro regime data. Sharp, specific, and without filler.
-
-## Personality
-- Confident and measured. Commit to views. No "it depends" trailing off.
-- Occasionally dry — the market earns it.
-- When data is murky, say so once: "The tape on X is noisy — but the structure says..."
-- NOT a financial advisor. Always end with: *This is intelligence, not advice. Trade responsibly.*
-
-## Tools
-- **web_search**: real-time news and catalysts. Use 2–4 targeted searches. Search specifically ("OGN Sun Pharma acquisition April 2026") not generically ("markets today").
-- **get_stock_quote**: live price, change %, and volume. ALWAYS call this before stating any entry price — article prices may be hours or days stale.
-
-## Workflow for trade questions
-1. Search for today's catalysts, earnings, premarket movers (2–4 targeted searches).
-2. Call get_stock_quote for EVERY ticker you plan to recommend.
-3. Build the trade around the live price. Acknowledge where it has already moved: "OGN is at $13.18 live — the easy gap is behind us. Here's what's left."
-
-## Aggression Level: {AGGRESSION_NAME} (Level {AGGRESSION_LEVEL}/5)
-{AGGRESSION_INSTRUCTIONS}
-
-## For trade questions — use this EXACT output format for each trade:
-
-═══════════════════════════════════════
-TRADE [N]: [SYMBOL] — [STRATEGY TYPE]
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-▸ INSTRUMENT: [exact ticker, or full option contract: SYMBOL $STRIKE EXPIRY CALL/PUT]
-▸ CURRENT PRICE: $[live price from get_stock_quote]
-▸ ENTRY ZONE: $[X] – $[Y] [(one-line rationale)]
-▸ TARGET: $[price] [(why this level)]
-▸ STOP-LOSS: $[price] [(what breaks the thesis)]
-▸ TIME HORIZON: [exact deadline — e.g. "Close by Friday April 30, 4PM ET"]
-▸ RISK/REWARD: [X:1]
-▸ AGGRESSION NOTE: [one sentence on sizing at this aggression level]
-
-THESIS: [3–4 sentences. Lead with the catalyst. Include specific numbers.]
-
-WHAT KILLS THIS TRADE: [one specific scenario that invalidates the thesis]
-WHAT CONFIRMS THIS WORKING: [one signal to watch that says the thesis is intact]
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+OUTPUT FORMAT — use exactly this structure for every trade:
+---
+TRADE [N]: [TICKER] — [STRATEGY_TYPE]
+INSTRUMENT: [exact ticker, or full option: TICKER $STRIKE MON DD YYYY CALL/PUT]
+CURRENT_PRICE: $X.XX
+ENTRY: $X.XX–$X.XX [one-line rationale]
+TARGET: $X.XX [why this level]
+STOP: $X.XX [what breaks the thesis]
+HORIZON: [specific date and time, e.g. "Close by Fri May 2 4PM ET" — always include PRE/POST-PRINT if options]
+RR: X:1 [verified math — show max profit and max loss for spreads]
+MAX_LOSS_PER_CONTRACT: $X [options/spreads only]
+THESIS: [3–4 sentences. Lead with the catalyst. Include specific numbers from context.]
+KILLS: [one specific scenario that invalidates the thesis]
+CONFIRMS: [one price action signal that says thesis is intact]
+---
 
 Use the trade format for: stock picks, options trades, catalyst plays, merger arb, momentum setups.
+For non-trade questions: natural prose, direct and specific, no rigid format needed.
 
-## For non-trade questions
-Natural prose. Direct and specific. Commit to views. No rigid format needed."""
+*This is intelligence, not advice. Trade responsibly.*"""
+
+# ── Brief prompt (daily summary, no trade cards) ─────────────────────────────
+CIPHER_SYSTEM_PROMPT = """You are CIPHER — the personal market intelligence agent for Apex Decision Engine.
+
+Identity: You are the user's dedicated desk analyst. Sharp, specific, no filler. Confident, occasionally dry.
+
+Brief structure (markdown headers, in order):
+## Market Pulse
+One sharp sentence on macro regime right now.
+
+## Your Watchlist
+For each symbol: verdict (STRONG_BUY/BUY/WATCH/AVOID/STRONG_AVOID), one conviction sentence, most important number. 2–3 lines max per symbol.
+
+## The Edge
+Highest-conviction idea from today's data. Lead with the number that matters. One paragraph.
+
+## Heads Up
+One specific tail risk or catalyst. Not "watch macro" — give the actual thing.
+
+## —
+One sentence close in CIPHER's voice. Then: *This is intelligence, not advice. Trade responsibly.*
+
+Rules: Clean markdown. Specific numbers over adjectives. "RSI at 28" beats "oversold." No invented conviction."""
 
 
-# ── Self-validation prompt — catches timing/logic errors ──────────────────────
-CIPHER_VALIDATOR_SYSTEM = """You are CIPHER's self-check module. Review a trade brief for critical errors only.
+# ── Month map for date parsing ────────────────────────────────────────────────
+_MONTH_MAP: Dict[str, int] = {
+    "JAN": 1, "FEB": 2, "MAR": 3, "APR": 4, "MAY": 5, "JUN": 6,
+    "JUL": 7, "AUG": 8, "SEP": 9, "OCT": 10, "NOV": 11, "DEC": 12,
+}
 
-Check ONLY these three things:
-1. TIMING: Is the exit deadline consistent with the strategy? (A 30-90 day merger arb with "exit by tomorrow" is wrong.)
-2. PRICING: Does the entry zone align with the stated current price?
-3. LOGIC: Any internal contradiction? (Stop-loss above entry on a long, target below entry, etc.)
-
-If no critical errors: respond with exactly: [VALID]
-If there is a critical error: respond with [FIX] followed by a corrected note in 40 words or fewer.
-
-Nothing else. Be extremely brief."""
+_TRADE_KEYWORDS = re.compile(
+    r'\b(trade|setup|buy|sell|option|call|put|short|long|play|recommend|idea|'
+    r'catalyst|earnings|breakout|momentum|condor|spread|arb|arbitrage)\b',
+    re.IGNORECASE,
+)
 
 
-def _build_master_prompt(aggression_level: int = 3) -> str:
-    cfg = AGGRESSION_CONFIGS.get(aggression_level, AGGRESSION_CONFIGS[3])
-    return CIPHER_MASTER_SYSTEM_PROMPT.format(
-        AGGRESSION_NAME=cfg["name"],
-        AGGRESSION_LEVEL=aggression_level,
-        AGGRESSION_INSTRUCTIONS=cfg["instructions"],
+# ── Date / float helpers ──────────────────────────────────────────────────────
+
+def _parse_date_from_text(s: str) -> Optional[date]:
+    """Parse a date from various text formats used in CIPHER output."""
+    if not s:
+        return None
+    u = s.strip().upper()
+    # "APR 30 2026", "APR 30" — month name format
+    m = re.search(
+        r'(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\s+(\d{1,2})(?:[,\s]+(\d{4}))?', u
     )
+    if m:
+        try:
+            mon = _MONTH_MAP[m.group(1)]
+            day = int(m.group(2))
+            yr  = int(m.group(3)) if m.group(3) else date.today().year
+            return date(yr, mon, day)
+        except (ValueError, KeyError):
+            pass
+    # "04/30/2026"
+    m2 = re.search(r'(\d{1,2})/(\d{1,2})/(\d{4})', u)
+    if m2:
+        try:
+            return date(int(m2.group(3)), int(m2.group(1)), int(m2.group(2)))
+        except ValueError:
+            pass
+    # "2026-04-30"
+    m3 = re.search(r'(\d{4})-(\d{2})-(\d{2})', u)
+    if m3:
+        try:
+            return date(int(m3.group(1)), int(m3.group(2)), int(m3.group(3)))
+        except ValueError:
+            pass
+    return None
+
+
+def _parse_float(s: str) -> Optional[float]:
+    if not s:
+        return None
+    cleaned = re.sub(r'[,$\s]', '', s)
+    try:
+        return float(cleaned)
+    except (ValueError, TypeError):
+        return None
+
+
+# ── MISSION 1: Parse + Validate ───────────────────────────────────────────────
+
+def parse_cipher_output(raw_text: str) -> List[Dict[str, Any]]:
+    """
+    Parse CIPHER's structured output into trade objects using regex.
+    Deterministic, zero-token. Returns list of trade dicts.
+    Handles both new plain format (TRADE N: ...) and legacy ═══ delimited.
+    """
+    trades: List[Dict[str, Any]] = []
+
+    # Split on trade headers — works for both old and new format
+    blocks = re.split(r'(?=TRADE\s+\d+\s*:)', raw_text, flags=re.IGNORECASE)
+
+    for block in blocks:
+        block = block.strip()
+        if not re.match(r'TRADE\s+\d+\s*:', block, re.IGNORECASE):
+            continue
+
+        trade: Dict[str, Any] = {}
+
+        # Header: TRADE N: TICKER — STRATEGY_TYPE
+        hdr = re.match(r'TRADE\s+(\d+)\s*:\s*([A-Z0-9.\-]+)\s*[—–\-]+\s*(.+?)(?:\n|$)', block, re.IGNORECASE)
+        if not hdr:
+            continue
+        trade["trade_num"]     = int(hdr.group(1))
+        trade["ticker"]        = hdr.group(2).strip().upper()
+        strategy_raw           = hdr.group(3).strip().upper()
+        # Take first token as strategy type (strip decorative chars)
+        trade["strategy_type"] = re.split(r'[\s─━═]', strategy_raw)[0]
+        trade["_raw_block"]    = block
+
+        # INSTRUMENT
+        instr_m = re.search(r'INSTRUMENT\s*[:\|▸]?\s*(.+?)(?:\n|$)', block, re.IGNORECASE)
+        if instr_m:
+            instr = instr_m.group(1).strip()
+            trade["instrument_description"] = instr
+            instr_up = instr.upper()
+            if re.search(r'\b(CALL|PUT)\b', instr_up):
+                trade["instrument_type"] = "option"
+                if "CONDOR" in instr_up or re.search(r'\$[\d.]+/\$?[\d.]+/\$?[\d.]+', instr):
+                    trade["instrument_type"] = "spread"
+                    trade["strategy_type"]   = "IRON_CONDOR"
+                    strikes = [_parse_float(x) for x in re.findall(r'\$?([\d.]+)', instr) if _parse_float(x)]
+                    if len(strikes) >= 4:
+                        s_sorted = sorted(strikes[:4])
+                        trade["spread_width"] = round(s_sorted[1] - s_sorted[0], 2)
+                exp = _parse_date_from_text(instr)
+                if exp:
+                    trade["expiry_date"] = exp
+            else:
+                trade["instrument_type"] = "stock"
+
+        # CURRENT_PRICE
+        cp_m = re.search(r'CURRENT.PRICE\s*[:\|▸]?\s*\$?([\d,.]+)', block, re.IGNORECASE)
+        if cp_m:
+            trade["current_price"] = _parse_float(cp_m.group(1))
+
+        # ENTRY (zone or single)
+        ez_m = re.search(
+            r'ENTRY(?:\s+ZONE)?\s*[:\|▸]?\s*\$?([\d,.]+)\s*[–—\-]+\s*\$?([\d,.]+)',
+            block, re.IGNORECASE,
+        )
+        if ez_m:
+            lo = _parse_float(ez_m.group(1))
+            hi = _parse_float(ez_m.group(2))
+            trade["entry_zone_low"]  = lo
+            trade["entry_zone_high"] = hi
+            trade["entry_midpoint"]  = round((lo + hi) / 2, 4) if lo and hi else lo or hi
+        else:
+            es_m = re.search(r'ENTRY(?:\s+ZONE)?\s*[:\|▸]?\s*\$?([\d,.]+)', block, re.IGNORECASE)
+            if es_m:
+                ep = _parse_float(es_m.group(1))
+                trade["entry_zone_low"] = trade["entry_zone_high"] = trade["entry_midpoint"] = ep
+
+        # TARGET
+        tgt_m = re.search(r'TARGET\s*[:\|▸]?\s*\$?([\d,.]+)', block, re.IGNORECASE)
+        if tgt_m:
+            trade["target"] = _parse_float(tgt_m.group(1))
+
+        # STOP / STOP-LOSS
+        sl_m = re.search(r'STOP(?:-?LOSS)?\s*[:\|▸]?\s*\$?([\d,.]+)', block, re.IGNORECASE)
+        if sl_m:
+            trade["stop_loss"] = _parse_float(sl_m.group(1))
+
+        # HORIZON — extract exit date and detect pre-print
+        hz_m = re.search(r'(?:TIME\s+)?HORIZON\s*[:\|▸]?\s*(.+?)(?:\n|$)', block, re.IGNORECASE)
+        if hz_m:
+            htxt = hz_m.group(1).strip()
+            trade["horizon_text"] = htxt
+            xd = _parse_date_from_text(htxt)
+            if xd:
+                trade["exit_date"] = xd
+                trade["hold_days"] = (xd - date.today()).days
+            if re.search(r'PRE.PRINT|PRE.EARNINGS|BEFORE\s+EARN', htxt.upper()):
+                trade["strategy_subtype"] = "earnings_pre_print"
+
+        # Also check STRATEGY_TYPE for pre-print
+        if trade["strategy_type"] in ("EARNINGS_PRE_PRINT",):
+            trade["strategy_subtype"] = "earnings_pre_print"
+
+        # RISK/REWARD
+        rr_m = re.search(r'(?:RISK/?REWARD|RR)\s*[:\|▸]?\s*([\d.]+)\s*:?\s*1', block, re.IGNORECASE)
+        if rr_m:
+            trade["risk_reward_ratio"] = _parse_float(rr_m.group(1))
+
+        # MAX_LOSS_PER_CONTRACT
+        ml_m = re.search(r'MAX.LOSS.PER.CONTRACT\s*[:\|▸]?\s*\$?([\d,.]+)', block, re.IGNORECASE)
+        if ml_m:
+            trade["max_loss_per_contract"] = _parse_float(ml_m.group(1))
+
+        trades.append(trade)
+
+    return trades
+
+
+def validate_cipher_trade(trade: Dict[str, Any]) -> List[str]:
+    """
+    Deterministic validation of a parsed trade dict.
+    Returns list of error strings. Empty list = valid.
+    Zero token cost — pure Python logic.
+    """
+    errors: List[str] = []
+    today = date.today()
+
+    # Rule 1: Options expiry vs exit date consistency
+    if trade.get("instrument_type") in ("option", "spread"):
+        expiry = trade.get("expiry_date")
+        exit_d = trade.get("exit_date")
+        if expiry and exit_d:
+            if exit_d > expiry:
+                errors.append(
+                    f"EXIT_AFTER_EXPIRY: Exit date {exit_d} is after option expiry {expiry}. "
+                    f"Fix exit to be on or before expiry date."
+                )
+            if exit_d == expiry and trade.get("strategy_subtype") == "earnings_pre_print":
+                errors.append(
+                    "PRE_PRINT_EXIT: This is a pre-earnings play. "
+                    "Exit must be BEFORE the earnings print, not on expiry day. "
+                    "Adjust the exit deadline."
+                )
+
+    # Rule 2: Iron condor R/R sanity
+    if trade.get("strategy_type") == "IRON_CONDOR":
+        rr = trade.get("risk_reward_ratio")
+        if rr and rr > 2.0:
+            errors.append(
+                f"RR_MATH_ERROR: Iron condor R/R of {rr}:1 is implausible. "
+                f"Iron condors collect premium < spread width, giving R/R of 0.3:1–1:1. "
+                f"Recalculate: state max_profit (premium collected) and max_loss "
+                f"((spread_width × 100) − premium)."
+            )
+
+    # Rule 3: Merger arb minimum hold
+    strat = (trade.get("strategy_type") or "").upper()
+    if "MERGER" in strat or strat == "MERGER_ARB":
+        hold = trade.get("hold_days")
+        if hold is not None and hold < 30:
+            errors.append(
+                f"MERGER_ARB_TOO_SHORT: Merger arb with {hold}-day exit. "
+                f"Deal close is months away — minimum 30-day horizon required. "
+                f"State the spread-to-close thesis explicitly."
+            )
+
+    # Rule 4: Inverted R/R (stop wider than target)
+    entry  = trade.get("entry_midpoint")
+    target = trade.get("target")
+    stop   = trade.get("stop_loss")
+    if entry and target and stop:
+        reward = abs(target - entry)
+        risk   = abs(entry - stop)
+        if risk > 0 and reward > 0 and risk > reward * 1.1:
+            errors.append(
+                f"INVERTED_RR: Risk (${risk:.2f}) is larger than reward (${reward:.2f}). "
+                f"R/R is less than 1:1. Reconsider entry, target, or stop."
+            )
+
+    return errors
+
+
+def _inject_validation_warnings(block: str, errors: List[str]) -> str:
+    """Append a visible warning block to a failing trade card."""
+    warn_lines = "\n".join(f"  • {e}" for e in errors)
+    return block.rstrip() + f"\n\n⚠ VALIDATION WARNINGS:\n{warn_lines}\n"
+
+
+def _split_response_into_sections(text: str) -> Tuple[str, List[str], str]:
+    """
+    Split CIPHER response into: preamble, [trade blocks], postamble.
+    Trade blocks start with 'TRADE N:'.
+    """
+    # Find all trade block positions
+    matches = list(re.finditer(r'(?:^|\n)(---\n)?(TRADE\s+\d+\s*:)', text, re.IGNORECASE))
+    if not matches:
+        return text, [], ""
+
+    preamble = text[: matches[0].start()].strip()
+    trade_blocks: List[str] = []
+
+    for i, m in enumerate(matches):
+        start = m.start()
+        end   = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        trade_blocks.append(text[start:end].strip())
+
+    postamble = ""
+    # If last "trade block" ends with non-trade text (e.g. italic disclaimer), strip it
+    if trade_blocks:
+        last = trade_blocks[-1]
+        disc_m = re.search(r'\n\*This is intelligence.*$', last, re.IGNORECASE | re.DOTALL)
+        if disc_m:
+            postamble = disc_m.group(0).strip()
+            trade_blocks[-1] = last[: disc_m.start()].strip()
+
+    return preamble, trade_blocks, postamble
+
+
+# ── MISSION 3: Compact market context builder ─────────────────────────────────
+
+def build_cipher_context(symbols: Optional[List[str]] = None) -> str:
+    """
+    Build a compact market context string under 400 tokens.
+    Replaces verbose prose context injection.
+    """
+    try:
+        import yfinance as yf  # type: ignore
+
+        # ET offset: UTC-4 (EDT) or UTC-5 (EST)
+        now_utc  = datetime.now(timezone.utc)
+        et_offset = -4 if (3 <= now_utc.month <= 11) else -5
+        now_et   = now_utc + timedelta(hours=et_offset)
+        ts_str   = now_et.strftime("%m/%d %H:%M ET")
+
+        # Session detection
+        hour = now_et.hour
+        minute = now_et.minute
+        is_regular = (hour == 9 and minute >= 30) or (10 <= hour < 16)
+        is_pre = (4 <= hour < 9) or (hour == 9 and minute < 30)
+        session = "REGULAR" if is_regular else ("PRE" if is_pre else "AFTER/CLOSED")
+
+        # Macro snapshot
+        macro_map = {"SPY": "SPY", "QQQ": "QQQ", "VIX": "^VIX", "DXY": "DX-Y.NYB", "10Y": "^TNX", "OIL": "CL=F"}
+        macro: Dict[str, Dict] = {}
+        for label, sym in macro_map.items():
+            try:
+                info  = yf.Ticker(sym).fast_info
+                price = float(info.last_price)
+                prev  = float(getattr(info, "previous_close", None) or price)
+                chg   = round((price - prev) / prev * 100, 2) if prev else 0.0
+                macro[label] = {"p": price, "c": chg}
+            except Exception:
+                macro[label] = {"p": 0, "c": 0}
+
+        def _fmt(label: str) -> str:
+            d = macro.get(label, {"p": 0, "c": 0})
+            return f"{label}:{d['p']:.2f}({d['c']:+.1f}%)"
+
+        lines = [
+            f"MARKET_SNAPSHOT [{ts_str}]",
+            f"{_fmt('SPY')} {_fmt('QQQ')} {_fmt('VIX')} DXY:{macro.get('DXY',{}).get('p',0):.2f} 10Y:{macro.get('10Y',{}).get('p',0):.2f}%",
+            f"SESSION:{session} OIL:{macro.get('OIL',{}).get('p',0):.2f}({'↑' if macro.get('OIL',{}).get('c',0)>0 else '↓'}{abs(macro.get('OIL',{}).get('c',0)):.1f}%)",
+        ]
+
+        # Per-symbol compact data
+        if symbols:
+            for sym in symbols[:5]:
+                try:
+                    t = yf.Ticker(sym)
+                    fi = t.fast_info
+                    price = float(fi.last_price)
+                    prev  = float(getattr(fi, "previous_close", None) or price)
+                    chg   = round((price - prev) / prev * 100, 2) if prev else 0.0
+
+                    # RSI-14 approximation
+                    hist = t.history(period="1mo", interval="1d")
+                    rsi = 50
+                    if len(hist) >= 15:
+                        delta = hist["Close"].diff().dropna()
+                        gain = delta.clip(lower=0).rolling(14).mean().iloc[-1]
+                        loss = (-delta.clip(upper=0)).rolling(14).mean().iloc[-1]
+                        if loss > 0:
+                            rsi = round(100 - 100 / (1 + gain / loss), 0)
+
+                    # Volume ratio
+                    vol_ratio = 1.0
+                    if "Volume" in hist.columns and len(hist) >= 20:
+                        avg_vol = hist["Volume"].rolling(20).mean().iloc[-1]
+                        last_vol = hist["Volume"].iloc[-1]
+                        vol_ratio = round(last_vol / avg_vol, 1) if avg_vol > 0 else 1.0
+
+                    lines.append(f"{sym}:${price:.2f}({chg:+.1f}%) RSI:{rsi:.0f} VOL:{vol_ratio:.1f}x")
+                except Exception:
+                    lines.append(f"{sym}: N/A")
+
+        return "\n".join(lines)
+
+    except Exception as exc:
+        logger.warning("build_cipher_context failed: %s", exc)
+        return "Market context unavailable"
 
 
 def build_macro_context() -> str:
-    """Fetch a live macro snapshot via yfinance. Synchronous."""
-    try:
-        import yfinance as yf  # type: ignore
-        symbols = {
-            "SPY": "SPY", "QQQ": "QQQ", "VIX": "^VIX",
-            "GLD": "GLD", "TLT": "TLT",
-            "XLK": "XLK", "XLF": "XLF", "XLE": "XLE", "XLV": "XLV",
-        }
-        parts: List[str] = []
-        for label, sym in symbols.items():
-            try:
-                info = yf.Ticker(sym).fast_info
-                price = round(float(info.last_price), 2)
-                prev  = float(getattr(info, "previous_close", 0) or 0)
-                chg   = round((price - prev) / prev * 100, 2) if prev else 0.0
-                parts.append(f"{label} ${price} ({chg:+.1f}%)")
-            except Exception:
-                parts.append(f"{label} N/A")
-        return " | ".join(parts)
-    except Exception as e:
-        logger.warning("Macro context fetch failed: %s", e)
-        return "Macro snapshot unavailable"
+    """Legacy compatibility — calls build_cipher_context with no symbols."""
+    return build_cipher_context()
 
+
+# ── Performance context injection (Mission 3.4) ───────────────────────────────
+
+async def build_performance_context(user_id: str, supabase_url: str, service_key: str) -> str:
+    """
+    Inject compact CIPHER win-rate context into the prompt once 20+ closed trades exist.
+    Returns empty string if insufficient data.
+    """
+    if not supabase_url or not service_key or not user_id:
+        return ""
+    try:
+        import httpx  # type: ignore
+        hdrs = {
+            "Authorization": f"Bearer {service_key}",
+            "apikey": service_key,
+        }
+        url = (
+            f"{supabase_url}/rest/v1/cipher_trade_log"
+            f"?user_id=eq.{user_id}"
+            f"&status=in.(win,loss)"
+            f"&select=status,strategy_type,pnl_percent,aggression_level"
+            f"&limit=200"
+        )
+        async with httpx.AsyncClient(timeout=6.0) as c:
+            r = await c.get(url, headers=hdrs)
+        if r.status_code != 200:
+            return ""
+        rows = r.json()
+        if not isinstance(rows, list) or len(rows) < 20:
+            return ""
+
+        wins   = [r for r in rows if r["status"] == "win"]
+        losses = [r for r in rows if r["status"] == "loss"]
+        total  = len(wins) + len(losses)
+        if total == 0:
+            return ""
+
+        wr = round(len(wins) / total * 100, 0)
+
+        # By strategy type
+        strat_stats: Dict[str, Dict[str, int]] = {}
+        for row in rows:
+            st = row.get("strategy_type", "UNKNOWN")
+            if st not in strat_stats:
+                strat_stats[st] = {"w": 0, "l": 0}
+            if row["status"] == "win":
+                strat_stats[st]["w"] += 1
+            else:
+                strat_stats[st]["l"] += 1
+
+        strat_lines = []
+        for st, d in sorted(strat_stats.items(), key=lambda x: x[1]["w"] + x[1]["l"], reverse=True)[:4]:
+            tot = d["w"] + d["l"]
+            if tot >= 3:
+                wr_st = round(d["w"] / tot * 100, 0)
+                strat_lines.append(f"{st}={wr_st:.0f}%({tot})")
+
+        return (
+            f"CIPHER_PERF ({total} closed): WinRate={wr:.0f}% | "
+            f"By strategy: {', '.join(strat_lines) or 'insufficient data'}"
+        )
+    except Exception as exc:
+        logger.debug("build_performance_context failed: %s", exc)
+        return ""
+
+
+# ── CIPHER brief ──────────────────────────────────────────────────────────────
 
 def _compact_signal(sig: Dict[str, Any]) -> Dict[str, Any]:
-    """Strip signal to minimum tokens needed for CIPHER (~60% reduction)."""
     return {
-        "sym":    sig.get("symbol"),
-        "v":      sig.get("verdict"),
-        "c":      sig.get("confidence"),
-        "p":      sig.get("price"),
-        "tf":     sig.get("timeframe_label") or sig.get("timeframe"),
-        "lead":   sig.get("lead_signal"),
-        "bull":   sig.get("bull_case"),
-        "bear":   sig.get("bear_case"),
-        "regime": sig.get("market_regime"),
-        "uoa":    sig.get("uoa_note"),
-        "scalp":  sig.get("scalp_note"),
-        "long":   sig.get("long_note"),
+        "sym":   sig.get("symbol"),
+        "v":     sig.get("verdict"),
+        "c":     sig.get("confidence"),
+        "p":     sig.get("price"),
+        "tf":    sig.get("timeframe_label") or sig.get("timeframe"),
+        "lead":  sig.get("lead_signal"),
+        "bull":  sig.get("bull_case"),
+        "bear":  sig.get("bear_case"),
+        "uoa":   sig.get("uoa_note"),
     }
 
 
+async def generate_brief(
+    user_email: str,
+    user_id: str,
+    preferences: Dict[str, Any],
+    signals: List[Dict[str, Any]],
+    regime: Dict[str, Any],
+) -> str:
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    if not api_key:
+        return "_CIPHER offline — ANTHROPIC_API_KEY not configured._"
+
+    client = anthropic.Anthropic(api_key=api_key)
+    model  = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
+
+    watchlist       = preferences.get("watchlist", [])
+    alert_types     = preferences.get("alert_types", [])
+    compact_signals = [_compact_signal(s) for s in signals]
+
+    ctx_parts = [
+        f"Watchlist: {', '.join(watchlist) if watchlist else 'not configured'}",
+        f"Alert focus: {', '.join(alert_types) if alert_types else 'general'}",
+        f"Macro regime: {regime.get('regime', 'NEUTRAL')} | SPY vs 200MA: {regime.get('spy_vs_200ma', 0):+.1f}% | VIX: {regime.get('vix_level', 'NORMAL')}",
+        f"Signals: {json.dumps(compact_signals, separators=(',', ':'))}",
+    ]
+
+    try:
+        response = client.messages.create(
+            model=model,
+            max_tokens=900,
+            system=[{"type": "text", "text": CIPHER_SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
+            messages=[{"role": "user", "content": f"Generate my brief.\n\n{chr(10).join(ctx_parts)}"}],
+        )
+        return response.content[0].text
+    except Exception as e:
+        logger.error("CIPHER brief generation failed: %s", e)
+        raise
+
+
+# ── Tool helpers ──────────────────────────────────────────────────────────────
+
 def _fetch_quote_sync(symbol: str) -> str:
-    """Fetch a live quote. Called from inside the tool-use loop."""
     try:
         from web.backend.app import connector as _conn  # type: ignore
         q = _conn.market_data.fetch_quote(symbol.upper().strip())
@@ -234,12 +634,28 @@ def _fetch_quote_sync(symbol: str) -> str:
 
 
 def _extract_text(response: Any) -> str:
-    text_parts = [
+    return "\n".join(
         block.text for block in response.content
         if hasattr(block, "type") and block.type == "text" and getattr(block, "text", "")
-    ]
-    return "\n".join(text_parts)
+    )
 
+
+def _build_master_prompt(
+    aggression_level: int = 3,
+    market_context: str = "",
+    performance_context: str = "",
+) -> str:
+    cfg = AGGRESSION_CONFIGS.get(aggression_level, AGGRESSION_CONFIGS[3])
+    return CIPHER_MASTER_SYSTEM_PROMPT.format(
+        AGGRESSION_LEVEL=aggression_level,
+        AGGRESSION_NAME=cfg["name"],
+        AGGRESSION_INSTRUCTIONS=cfg["instructions"],
+        MARKET_CONTEXT=market_context or "Unavailable",
+        PERFORMANCE_CONTEXT=performance_context or "Building track record...",
+    )
+
+
+# ── Tool-use loop ─────────────────────────────────────────────────────────────
 
 def _run_tool_loop(
     client: Any,
@@ -250,12 +666,6 @@ def _run_tool_loop(
     max_tokens: int = 3000,
     max_iter: int = 8,
 ) -> Any:
-    """
-    Synchronous tool-use loop.
-    - web_search (server-side): results embedded in response.content automatically.
-    - get_stock_quote (client-side): we execute and inject tool_result blocks.
-    Returns the final response object.
-    """
     response = client.messages.create(
         model=model,
         max_tokens=max_tokens,
@@ -264,9 +674,9 @@ def _run_tool_loop(
         tools=tools,
     )
 
-    iterations = 0
-    while response.stop_reason == "tool_use" and iterations < max_iter:
-        iterations += 1
+    for _ in range(max_iter):
+        if response.stop_reason != "tool_use":
+            break
 
         assistant_content = []
         for block in response.content:
@@ -307,65 +717,139 @@ def _run_tool_loop(
     return response
 
 
-def _validate_output_sync(client: Any, model: str, trade_text: str) -> str:
-    """Lightweight post-generation check. Non-fatal — returns original on any error."""
-    try:
-        response = client.messages.create(
-            model=model,
-            max_tokens=80,
-            system=CIPHER_VALIDATOR_SYSTEM,
-            messages=[{"role": "user", "content": trade_text[:4000]}],
-        )
-        verdict = _extract_text(response).strip()
-        if verdict.startswith("[FIX]"):
-            correction = verdict[5:].strip()
-            return trade_text + f"\n\n*⚠ Auto-correction: {correction}*"
-    except Exception as e:
-        logger.debug("Validation step skipped (non-fatal): %s", e)
-    return trade_text
+# ── MISSION 1: Pre-output validation gate ────────────────────────────────────
 
-
-async def generate_brief(
-    user_email: str,
-    user_id: str,
-    preferences: Dict[str, Any],
-    signals: List[Dict[str, Any]],
-    regime: Dict[str, Any],
-) -> str:
+def _apply_validation_gate(
+    raw_result: str,
+    client: Any,
+    model: str,
+    system_blocks: List[Dict],
+    tools: List[Dict],
+    aggression_level: int,
+) -> Tuple[str, List[Dict[str, Any]]]:
     """
-    Generate a personalized CIPHER brief for the user.
-    Returns the brief text. Raises on API failure (caller handles caching/storage).
+    Parse CIPHER output, validate each trade, regenerate failing cards.
+    Returns (final_text, parsed_trades).
+    Regeneration is capped at 1 attempt per card to keep latency reasonable.
     """
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
-    if not api_key:
-        return "_CIPHER offline — ANTHROPIC_API_KEY not configured._"
+    # Only run on trade-formatted output
+    if "TRADE " not in raw_result.upper():
+        return raw_result, []
 
-    client = anthropic.Anthropic(api_key=api_key)
-    model  = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
+    trades = parse_cipher_output(raw_result)
+    if not trades:
+        return raw_result, []
 
-    watchlist   = preferences.get("watchlist", [])
-    alert_types = preferences.get("alert_types", [])
-    compact_signals = [_compact_signal(s) for s in signals]
+    preamble, trade_blocks, postamble = _split_response_into_sections(raw_result)
 
-    user_ctx_parts = [
-        f"Watchlist: {', '.join(watchlist) if watchlist else 'not configured — give a general market brief'}",
-        f"Alert focus: {', '.join(alert_types) if alert_types else 'general'}",
-        f"Macro regime: {regime.get('regime', 'NEUTRAL')} | SPY vs 200MA: {regime.get('spy_vs_200ma', 0):+.1f}% | VIX: {regime.get('vix_level', 'NORMAL')}",
-        f"Signals: {json.dumps(compact_signals, separators=(',', ':'))}",
-    ]
+    corrected_blocks: List[str] = []
+    all_trades: List[Dict[str, Any]] = []
 
-    try:
-        response = client.messages.create(
-            model=model,
-            max_tokens=900,
-            system=[{"type": "text", "text": CIPHER_SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
-            messages=[{"role": "user", "content": f"Generate my brief.\n\n{chr(10).join(user_ctx_parts)}"}],
+    for i, trade in enumerate(trades):
+        errors = validate_cipher_trade(trade)
+        raw_block = trade.get("_raw_block", trade_blocks[i] if i < len(trade_blocks) else "")
+
+        if not errors:
+            corrected_blocks.append(raw_block)
+            all_trades.append(trade)
+            continue
+
+        logger.info(
+            "CIPHER validation: trade %d (%s) has %d errors, regenerating...",
+            trade.get("trade_num", i + 1), trade.get("ticker", "?"), len(errors),
         )
-        return response.content[0].text
-    except Exception as e:
-        logger.error("CIPHER brief generation failed: %s", e)
-        raise
 
+        # One regeneration attempt
+        fix_prompt = (
+            "The following CIPHER trade card has these validation errors that MUST be fixed:\n\n"
+            + "\n".join(f"  {j+1}. {e}" for j, e in enumerate(errors))
+            + "\n\nRegenerate the entire trade card below with every error fixed. "
+            "Return ONLY the corrected trade card in the exact same format. Nothing else.\n\n"
+            + raw_block
+        )
+        try:
+            fix_msgs = [{"role": "user", "content": fix_prompt}]
+            fix_resp = _run_tool_loop(
+                client, model, system_blocks, fix_msgs, tools, max_tokens=800, max_iter=4,
+            )
+            fixed_text = _extract_text(fix_resp).strip()
+
+            if fixed_text and "TRADE " in fixed_text.upper():
+                # Re-parse and re-validate the fixed card
+                fixed_trades = parse_cipher_output(fixed_text)
+                if fixed_trades:
+                    re_errors = validate_cipher_trade(fixed_trades[0])
+                    if not re_errors:
+                        corrected_blocks.append(fixed_text)
+                        all_trades.append(fixed_trades[0])
+                        logger.info("Validation: trade %d corrected successfully.", trade.get("trade_num", i + 1))
+                        continue
+                    else:
+                        # Still failing — flag it
+                        logger.warning("Validation: trade %d still failing after regen, flagging.", trade.get("trade_num", i + 1))
+                        corrected_blocks.append(_inject_validation_warnings(fixed_text, re_errors))
+                        ft = fixed_trades[0]
+                        ft["validation_warnings"] = re_errors
+                        all_trades.append(ft)
+                        continue
+        except Exception as fix_err:
+            logger.warning("Validation regen failed: %s", fix_err)
+
+        # Regen failed or returned bad text — flag original
+        corrected_blocks.append(_inject_validation_warnings(raw_block, errors))
+        trade["validation_warnings"] = errors
+        all_trades.append(trade)
+
+    parts = []
+    if preamble:
+        parts.append(preamble)
+    parts.extend(corrected_blocks)
+    if postamble:
+        parts.append(postamble)
+
+    return "\n\n".join(parts), all_trades
+
+
+# ── MISSION 3.3: Two-step chain ───────────────────────────────────────────────
+
+def _is_trade_question(question: str) -> bool:
+    return bool(_TRADE_KEYWORDS.search(question))
+
+
+async def _scan_candidates(
+    client: Any,
+    model: str,
+    compact_ctx: str,
+    aggression_level: int,
+) -> List[Dict[str, str]]:
+    """
+    Step 1: Ultra-cheap scan call (~400 tokens total).
+    Returns up to 5 ticker candidates as list of dicts.
+    """
+    cfg = AGGRESSION_CONFIGS.get(aggression_level, AGGRESSION_CONFIGS[3])
+    scan_prompt = (
+        f"Market context:\n{compact_ctx}\n\n"
+        f"Aggression level: {aggression_level} ({cfg['name']})\n\n"
+        f"List 3-5 high-probability trade candidates for this session. "
+        f"JSON array only: [{{'ticker':'STR','type':'EARNINGS_PRE_PRINT','one_line':'STR'}}]"
+    )
+    try:
+        resp = client.messages.create(
+            model=model,
+            max_tokens=160,
+            messages=[{"role": "user", "content": scan_prompt}],
+        )
+        raw = _extract_text(resp).strip()
+        # Extract JSON array
+        m = re.search(r'\[.*\]', raw, re.DOTALL)
+        if m:
+            return json.loads(m.group(0))
+    except Exception as e:
+        logger.debug("Scan step failed (non-fatal): %s", e)
+    return []
+
+
+# ── Main answer function ──────────────────────────────────────────────────────
 
 async def answer_question(
     question: str,
@@ -374,83 +858,101 @@ async def answer_question(
     regime: Dict[str, Any],
     history: List[Dict[str, str]],
     aggression_level: int = 3,
-) -> str:
+    user_id: str = "",
+    supabase_url: str = "",
+    supabase_key: str = "",
+) -> Tuple[str, List[Dict[str, Any]]]:
     """
-    Answer a follow-up question in the CIPHER voice.
-    aggression_level: 1 (conservative) – 5 (apex).
+    Answer a CIPHER question.
+    Returns (reply_text, parsed_trades).
+    parsed_trades is non-empty only when CIPHER generated trade cards.
     """
     api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
     if not api_key:
-        return "_CIPHER offline — ANTHROPIC_API_KEY not configured._"
+        return "_CIPHER offline — ANTHROPIC_API_KEY not configured._", []
 
     client = anthropic.Anthropic(api_key=api_key)
     model  = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
 
-    system_prompt = _build_master_prompt(aggression_level)
-    macro_ctx     = build_macro_context()
-    compact_signals = [_compact_signal(s) for s in signals]
+    # Build compact context (replaces verbose prose — Mission 3.1)
+    watchlist     = preferences.get("watchlist", [])
+    compact_ctx   = build_cipher_context(watchlist[:5] if watchlist else None)
+    perf_ctx      = await build_performance_context(user_id, supabase_url, supabase_key)
 
-    now_utc = datetime.now(timezone.utc)
-    now_str = now_utc.strftime("%A %B %d, %Y — %I:%M %p UTC")
-    market_open = 13 <= now_utc.hour < 20  # 9:30 AM–4:00 PM ET in UTC
-
-    ctx = (
-        f"Current time: {now_str} (subtract 5h for EDT)\n"
-        f"Market session: {'OPEN' if market_open else 'PRE/AFTER-HOURS or CLOSED'}\n"
-        f"Macro snapshot (live): {macro_ctx}\n"
-        f"Market regime: {regime.get('regime', 'NEUTRAL')} | "
-        f"SPY vs 200MA: {regime.get('spy_vs_200ma', 0):+.1f}% | "
-        f"VIX: {regime.get('vix_level', 'NORMAL')}\n"
-        f"Watchlist quant signals (supplement only — use get_stock_quote for live prices): "
-        f"{json.dumps(compact_signals, separators=(',', ':'))}"
-    )
-
+    system_prompt = _build_master_prompt(aggression_level, compact_ctx, perf_ctx)
     system_blocks = [{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}]
+
     tools = [
         {"type": "web_search_20250305", "name": "web_search", "max_uses": 3},
         {
             "name": "get_stock_quote",
             "description": (
-                "Fetch the current real-time price, daily change %, and volume for a ticker. "
-                "ALWAYS call this before stating any entry price for a trade. "
-                "Web search article prices may be hours or days stale — this returns the live market price."
+                "Fetch current real-time price, daily change %, and volume for a ticker. "
+                "ALWAYS call this before stating any entry price — article prices are stale."
             ),
             "input_schema": {
                 "type": "object",
-                "properties": {
-                    "symbol": {"type": "string", "description": "Ticker symbol, e.g. 'OGN', 'SNDK', 'SPY'"}
-                },
+                "properties": {"symbol": {"type": "string", "description": "Ticker, e.g. 'NVDA'"}},
                 "required": ["symbol"],
             },
         },
     ]
 
-    messages: List[Dict[str, Any]] = list(history[-8:])
-    messages.append({"role": "user", "content": f"{question}\n\n[Context: {ctx}]"})
+    now_utc  = datetime.now(timezone.utc)
+    et_off   = -4 if (3 <= now_utc.month <= 11) else -5
+    now_et   = now_utc + timedelta(hours=et_off)
+    mkt_open = (now_et.hour == 9 and now_et.minute >= 30) or (10 <= now_et.hour < 16)
+    now_str  = now_et.strftime("%A %B %d, %Y — %I:%M %p ET")
+
+    compact_signals = [_compact_signal(s) for s in signals]
 
     try:
+        # Mission 3.3: Two-step chain for trade questions
+        scan_hint = ""
+        if _is_trade_question(question) and not history:
+            candidates = await _scan_candidates(client, model, compact_ctx, aggression_level)
+            if candidates:
+                scan_hint = (
+                    "\n\n[SCAN CANDIDATES — evaluate these first: "
+                    + json.dumps(candidates, separators=(",", ":"))
+                    + "]"
+                )
+
+        user_msg = (
+            f"{question}{scan_hint}\n\n"
+            f"[Time: {now_str} | Market: {'OPEN' if mkt_open else 'CLOSED/EXTENDED'} | "
+            f"Regime: {regime.get('regime', 'NEUTRAL')} | "
+            f"VIX: {regime.get('vix_level', 'NORMAL')} | "
+            f"Quant signals: {json.dumps(compact_signals, separators=(',', ':'))}]"
+        )
+
+        messages: List[Dict[str, Any]] = list(history[-8:])
+        messages.append({"role": "user", "content": user_msg})
+
         response = _run_tool_loop(client, model, system_blocks, messages, tools, 3000, 8)
-        result = _extract_text(response) or "_CIPHER: no analysis generated._"
+        raw_result = _extract_text(response) or "_CIPHER: no analysis generated._"
 
-        # Self-validation for structured trade output (lightweight, 80-token call)
-        if "═══" in result or "▸ ENTRY ZONE:" in result:
-            result = _validate_output_sync(client, model, result)
+        # Mission 1: Pre-output validation gate
+        final_text, parsed_trades = _apply_validation_gate(
+            raw_result, client, model, system_blocks, tools, aggression_level,
+        )
 
-        return result
+        return final_text, parsed_trades
 
     except anthropic.RateLimitError:
-        logger.warning("Anthropic rate limit hit on /admin/panel/ask")
+        logger.warning("Rate limit hit on CIPHER answer_question")
         return (
-            "**Rate limit reached** — too many tokens were sent in the last minute "
-            "(Anthropic free tier: 30k input tokens/min on Sonnet).\n\n"
-            "Wait 60 seconds and try again. To raise the limit:\n"
-            "- Switch to `ANTHROPIC_MODEL=claude-haiku-4-5-20251001` on Render (4× cheaper, higher limit), or\n"
-            "- Upgrade your Anthropic usage tier at console.anthropic.com.\n\n"
+            "**Rate limit reached** — too many tokens in the last minute.\n\n"
+            "Wait 60 seconds and try again, or switch to a lighter query.\n\n"
             "*This is intelligence, not advice. Trade responsibly.*"
-        )
+        ), []
     except anthropic.BadRequestError as e:
         logger.warning("Tool unavailable (%s), falling back to no-search mode", e)
-        return await _answer_no_search(question, compact_signals, regime, history, client, model)
+        result, trades = await _answer_no_search(
+            question, compact_ctx, compact_signals, regime, history,
+            client, model, aggression_level,
+        )
+        return result, trades
     except Exception as e:
         logger.exception("CIPHER answer failed: %s", e)
         raise
@@ -458,31 +960,30 @@ async def answer_question(
 
 async def _answer_no_search(
     question: str,
+    compact_ctx: str,
     compact_signals: List[Dict[str, Any]],
     regime: Dict[str, Any],
     history: List[Dict[str, str]],
     client: Any,
     model: str,
-) -> str:
-    """Fallback: answer without web search if the tool is unavailable."""
-    today_str = date.today().strftime("%B %d, %Y")
+    aggression_level: int = 3,
+) -> Tuple[str, List[Dict[str, Any]]]:
+    """Fallback: answer without web search."""
+    perf_ctx      = ""
+    system_prompt = _build_master_prompt(aggression_level, compact_ctx, perf_ctx)
     ctx = (
-        f"Today: {today_str}\n"
-        f"Market regime: {regime.get('regime', 'NEUTRAL')} | "
-        f"SPY vs 200MA: {regime.get('spy_vs_200ma', 0):+.1f}%\n"
-        f"Watchlist signals: {json.dumps(compact_signals, separators=(',', ':'))}"
+        f"Market context:\n{compact_ctx}\n"
+        f"Regime: {regime.get('regime', 'NEUTRAL')} | "
+        f"VIX: {regime.get('vix_level', 'NORMAL')}\n"
+        f"Quant signals: {json.dumps(compact_signals, separators=(',', ':'))}"
     )
     messages: List[Dict[str, Any]] = list(history[-8:])
-    messages.append({"role": "user", "content": f"{question}\n\n[Context: {ctx}]"})
-    fallback_prompt = CIPHER_MASTER_SYSTEM_PROMPT.format(
-        AGGRESSION_NAME=AGGRESSION_CONFIGS[3]["name"],
-        AGGRESSION_LEVEL=3,
-        AGGRESSION_INSTRUCTIONS=AGGRESSION_CONFIGS[3]["instructions"],
-    )
+    messages.append({"role": "user", "content": f"{question}\n\n[{ctx}]"})
     response = client.messages.create(
         model=model,
         max_tokens=2000,
-        system=[{"type": "text", "text": fallback_prompt, "cache_control": {"type": "ephemeral"}}],
+        system=[{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}],
         messages=messages,
     )
-    return _extract_text(response) or "_CIPHER: no analysis generated._"
+    raw = _extract_text(response) or "_CIPHER: no analysis generated._"
+    return raw, []

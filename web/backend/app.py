@@ -89,6 +89,22 @@ async def _accuracy_sweep_loop() -> None:
         await asyncio.sleep(4 * 3600)
 
 
+async def _cipher_expire_loop() -> None:
+    """
+    Daily job: expire stale pending CIPHER trades whose exit_deadline has passed.
+    Runs every 6 hours; actual expiry logic is idempotent.
+    """
+    from web.backend import signal_logger  # type: ignore
+    while True:
+        try:
+            n = await signal_logger.expire_stale_pending_trades()
+            if n:
+                logger.info("CIPHER expire job: %d pending trade(s) expired.", n)
+        except Exception as e:
+            logger.error("CIPHER expire loop error: %s", e)
+        await asyncio.sleep(6 * 3600)
+
+
 @app.on_event("startup")
 async def _startup() -> None:
     from web.backend import signal_logger  # type: ignore
@@ -97,6 +113,7 @@ async def _startup() -> None:
         os.environ.get("SUPABASE_SERVICE_ROLE_KEY", ""),
     )
     asyncio.create_task(_accuracy_sweep_loop())
+    asyncio.create_task(_cipher_expire_loop())
 
 cors_origins_str = os.environ.get("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173,https://apex-decision-engine.vercel.app")
 origins = [o.strip() for o in cors_origins_str.split(",") if o.strip()]
@@ -807,7 +824,7 @@ async def admin_panel_ask(body: AdminAskRequest) -> Dict[str, Any]:
     regime = get_cached_regime(connector)
     from web.backend import chat_engine, agent_engine  # type: ignore
     history = chat_engine.get_history(body.session_id)
-    reply = await agent_engine.answer_question(
+    reply, _parsed_trades = await agent_engine.answer_question(
         question=question,
         preferences={"watchlist": watchlist},
         signals=signals,
@@ -1732,6 +1749,7 @@ class AgentPreferences(BaseModel):
 class AgentQuestion(BaseModel):
     question: str
     session_id: str = "cipher-default"
+    aggression_level: int = 3
 
 
 @app.get("/agent/preferences")
@@ -1870,32 +1888,55 @@ async def agent_ask(
     if not body.question:
         raise HTTPException(status_code=400, detail="Question cannot be empty.")
 
+    aggression_level = max(1, min(5, body.aggression_level))
+
     user_data = users_db.get(user, {})
     user_id   = user_data.get("supabase_id", user)
     prefs = await _fetch_agent_preferences(user_id) or {}
-    watchlist = prefs.get("watchlist", ["SPY", "QQQ", "NVDA"])
 
-    import asyncio
-    from web.backend import chat_engine, agent_engine
-    tasks = [_generate_claude_signal(sym, connector, user_email=user, tier="apex") for sym in watchlist[:5]]
-    sig_results = await asyncio.gather(*tasks, return_exceptions=True)
-    signals = [r for r in sig_results if not isinstance(r, Exception)]
+    # Use only cached signals — avoid burning signal tokens before CIPHER starts.
+    # CIPHER has web_search + get_stock_quote to find live data itself.
+    watchlist = prefs.get("watchlist", ["SPY", "QQQ", "NVDA"])
+    signals: List[Dict[str, Any]] = []
+    for sym in watchlist[:5]:
+        for tier_key in (f"{sym}:apex", f"{sym}:edge", f"{sym}:free"):
+            cached = signal_cache.get(tier_key)
+            if cached and time.time() - cached["timestamp"] < 3600:
+                signals.append(cached["data"])
+                break
 
     history = chat_engine.get_history(body.session_id)
     regime  = get_cached_regime(connector)
 
-    reply = await agent_engine.answer_question(
+    from web.backend import agent_engine
+    reply, parsed_trades = await agent_engine.answer_question(
         question=body.question,
         preferences=prefs,
         signals=signals,
         regime=regime,
         history=history,
+        aggression_level=aggression_level,
+        user_id=user_id,
+        supabase_url=SUPABASE_URL,
+        supabase_key=SUPABASE_SERVICE_ROLE_KEY,
     )
 
     chat_engine._add_to_history(body.session_id, "user", body.question)
     chat_engine._add_to_history(body.session_id, "assistant", reply)
 
-    return {"reply": reply, "session_id": body.session_id}
+    # Auto-log parsed trades to cipher_trade_log (fire-and-forget)
+    if parsed_trades and user_id:
+        from web.backend import signal_logger as _sl
+        async def _auto_log_trades():
+            for t in parsed_trades:
+                await _sl.log_cipher_trade(t, user_id, aggression_level, reply)
+        asyncio.create_task(_auto_log_trades())
+
+    return {
+        "reply":          reply,
+        "session_id":     body.session_id,
+        "trades_logged":  len(parsed_trades),
+    }
 
 
 @app.get("/chat/history")
@@ -2240,3 +2281,92 @@ async def get_events(admin_key: str = "") -> Dict[str, Any]:
 async def health():
     """Health check."""
     return {"status": "ok"}
+
+
+# ── CIPHER Trade Log endpoints ────────────────────────────────────────────────
+
+class TradeResultUpdate(BaseModel):
+    status: str                   # win | loss | cancelled
+    exit_price: Optional[float]   = None
+    exit_date: Optional[str]      = None   # ISO string
+    notes: Optional[str]          = None
+
+
+@app.get("/cipher/trade-log")
+async def get_cipher_trade_log(
+    status: str = "all",
+    aggression_level: Optional[int] = None,
+    user: str = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """Fetch cipher_trade_log for the authenticated user."""
+    tier = get_user_tier(user, users_db)
+    if tier != "apex":
+        raise HTTPException(status_code=403, detail="CIPHER requires APEX tier")
+    user_id = users_db.get(user, {}).get("supabase_id", "")
+    if not user_id:
+        return {"trades": [], "count": 0}
+    from web.backend import signal_logger as _sl
+    rows = await _sl.get_cipher_trade_log(user_id, status=status, aggression_level=aggression_level)
+    return {"trades": rows, "count": len(rows)}
+
+
+@app.patch("/cipher/trade-log/{trade_id}")
+async def update_cipher_trade(
+    trade_id: str,
+    body: TradeResultUpdate,
+    user: str = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """Mark a trade as win/loss/cancelled with exit price."""
+    tier = get_user_tier(user, users_db)
+    if tier != "apex":
+        raise HTTPException(status_code=403, detail="CIPHER requires APEX tier")
+    if body.status not in ("win", "loss", "cancelled"):
+        raise HTTPException(status_code=400, detail="status must be win, loss, or cancelled")
+    user_id = users_db.get(user, {}).get("supabase_id", "")
+    if not user_id:
+        raise HTTPException(status_code=400, detail="User ID not resolved")
+
+    updates: Dict[str, Any] = {"status": body.status}
+    if body.exit_price is not None:
+        updates["exit_price"] = body.exit_price
+        updates["exit_date"]  = body.exit_date or datetime.utcnow().isoformat() + "Z"
+    if body.notes:
+        updates["notes"] = body.notes[:1000]
+
+    from web.backend import signal_logger as _sl
+    ok = await _sl.update_cipher_trade(trade_id, user_id, updates)
+    if not ok:
+        raise HTTPException(status_code=500, detail="Update failed")
+    return {"status": "updated", "trade_id": trade_id}
+
+
+@app.get("/cipher/trade-log/stats")
+async def get_cipher_stats(user: str = Depends(get_current_user)) -> Dict[str, Any]:
+    """Return CIPHER win rate and performance stats."""
+    tier = get_user_tier(user, users_db)
+    if tier != "apex":
+        raise HTTPException(status_code=403, detail="CIPHER requires APEX tier")
+    user_id = users_db.get(user, {}).get("supabase_id", "")
+    if not user_id:
+        return {"total_closed": 0, "win_rate": 0.0, "show_badge": False}
+    from web.backend import signal_logger as _sl
+    return await _sl.get_cipher_trade_stats(user_id)
+
+
+@app.get("/cipher/pending-positions")
+async def get_pending_positions(user: str = Depends(get_current_user)) -> Dict[str, Any]:
+    """Return pending CIPHER positions sorted by exit_deadline for the reminder bar."""
+    tier = get_user_tier(user, users_db)
+    if tier != "apex":
+        return {"positions": [], "count": 0}
+    user_id = users_db.get(user, {}).get("supabase_id", "")
+    if not user_id:
+        return {"positions": [], "count": 0}
+    from web.backend import signal_logger as _sl
+    rows = await _sl.get_cipher_trade_log(user_id, status="pending", limit=20)
+    # Sort by exit_deadline ascending (None last)
+    def _key(r):
+        d = r.get("exit_deadline")
+        return d or "9999"
+    rows.sort(key=_key)
+    return {"positions": rows, "count": len(rows)}

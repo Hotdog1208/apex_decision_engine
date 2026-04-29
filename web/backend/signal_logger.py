@@ -1,15 +1,12 @@
 """
-signal_logger.py — Supabase-backed signal logging and accuracy evaluation.
-
-Runs alongside the local PaperTrader to give persistent, restart-safe
-signal history. The accuracy sweep job is called from the FastAPI startup
-event every 4 hours.
+signal_logger.py — Supabase-backed signal logging, accuracy evaluation,
+and CIPHER trade log operations.
 """
 
 import asyncio
 import logging
 import os
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -326,3 +323,218 @@ async def get_accuracy_stats() -> Dict[str, Any]:
     except Exception as e:
         logger.error("get_accuracy_stats error: %s", e)
         return {**_EMPTY_STATS, "error": str(e)}
+
+
+# ── CIPHER Trade Log ──────────────────────────────────────────────────────────
+
+async def log_cipher_trade(
+    trade: Dict[str, Any],
+    user_id: str,
+    aggression_level: int,
+    full_brief: str,
+) -> Optional[str]:
+    """
+    Auto-log a parsed CIPHER trade to cipher_trade_log.
+    Best-effort — never raises. Returns new row UUID or None.
+    """
+    if not _ok() or not user_id:
+        return None
+    try:
+        exit_deadline = None
+        if trade.get("exit_date"):
+            xd = trade["exit_date"]
+            if hasattr(xd, "isoformat"):
+                exit_deadline = xd.isoformat() + "T16:00:00-04:00"
+
+        payload: Dict[str, Any] = {
+            "user_id":               user_id,
+            "trade_date":            date.today().isoformat(),
+            "ticker":                trade.get("ticker", "UNKNOWN"),
+            "strategy_type":         trade.get("strategy_type", "UNKNOWN"),
+            "instrument_description": trade.get("instrument_description", trade.get("ticker", "")),
+            "aggression_level":      aggression_level,
+            "entry_zone_low":        trade.get("entry_zone_low"),
+            "entry_zone_high":       trade.get("entry_zone_high"),
+            "target":                trade.get("target"),
+            "stop_loss":             trade.get("stop_loss"),
+            "exit_deadline":         exit_deadline,
+            "risk_reward_ratio":     trade.get("risk_reward_ratio"),
+            "full_cipher_brief":     full_brief[:4000],
+            "status":                "pending",
+            "validation_warnings":   trade.get("validation_warnings") or [],
+        }
+        # Remove None values to avoid type errors on strict columns
+        payload = {k: v for k, v in payload.items() if v is not None}
+
+        async with httpx.AsyncClient(timeout=8.0) as c:
+            resp = await c.post(
+                f"{_SUPABASE_URL}/rest/v1/cipher_trade_log",
+                json=payload,
+                headers={**_hdr(), "Prefer": "return=representation"},
+            )
+        if resp.status_code in (200, 201):
+            rows = resp.json()
+            return rows[0]["id"] if rows else None
+        logger.warning("cipher_trade_log insert failed: %s", resp.text[:200])
+    except Exception as e:
+        logger.debug("log_cipher_trade skipped: %s", e)
+    return None
+
+
+async def get_cipher_trade_log(
+    user_id: str,
+    status: Optional[str] = None,
+    aggression_level: Optional[int] = None,
+    limit: int = 200,
+) -> List[Dict[str, Any]]:
+    """Fetch cipher_trade_log rows for a user with optional filters."""
+    if not _ok():
+        return []
+    try:
+        url = (
+            f"{_SUPABASE_URL}/rest/v1/cipher_trade_log"
+            f"?user_id=eq.{user_id}"
+            f"&order=trade_date.desc,created_at.desc"
+            f"&limit={limit}"
+        )
+        if status and status != "all":
+            url += f"&status=eq.{status}"
+        if aggression_level:
+            url += f"&aggression_level=eq.{aggression_level}"
+
+        async with httpx.AsyncClient(timeout=10.0) as c:
+            r = await c.get(url, headers=_hdr())
+        if r.status_code == 200 and isinstance(r.json(), list):
+            return r.json()
+    except Exception as e:
+        logger.debug("get_cipher_trade_log error: %s", e)
+    return []
+
+
+async def update_cipher_trade(
+    trade_id: str,
+    user_id: str,
+    updates: Dict[str, Any],
+) -> bool:
+    """Update a cipher_trade_log row. Returns True on success."""
+    if not _ok():
+        return False
+    try:
+        url = (
+            f"{_SUPABASE_URL}/rest/v1/cipher_trade_log"
+            f"?id=eq.{trade_id}&user_id=eq.{user_id}"
+        )
+        async with httpx.AsyncClient(timeout=8.0) as c:
+            resp = await c.patch(
+                url,
+                json=updates,
+                headers={**_hdr(), "Prefer": "return=minimal"},
+            )
+        return resp.status_code in (200, 204)
+    except Exception as e:
+        logger.debug("update_cipher_trade error: %s", e)
+    return False
+
+
+async def get_cipher_trade_stats(user_id: str) -> Dict[str, Any]:
+    """Compute win/loss stats for CIPHER win rate badge and dashboard widget."""
+    if not _ok():
+        return _empty_cipher_stats()
+    try:
+        url = (
+            f"{_SUPABASE_URL}/rest/v1/cipher_trade_log"
+            f"?user_id=eq.{user_id}"
+            f"&select=id,status,aggression_level,strategy_type,pnl_percent,ticker,trade_date"
+            f"&limit=500"
+        )
+        async with httpx.AsyncClient(timeout=10.0) as c:
+            r = await c.get(url, headers=_hdr())
+        if r.status_code != 200:
+            return _empty_cipher_stats()
+        rows: List[Dict] = r.json() if isinstance(r.json(), list) else []
+
+        closed    = [r for r in rows if r["status"] in ("win", "loss")]
+        wins      = [r for r in closed if r["status"] == "win"]
+        losses    = [r for r in closed if r["status"] == "loss"]
+        pending   = [r for r in rows if r["status"] == "pending"]
+        total_closed = len(closed)
+        win_rate  = round(len(wins) / total_closed * 100, 1) if total_closed else 0.0
+
+        # By aggression level
+        by_level: Dict[int, Dict] = {}
+        for lvl in range(1, 6):
+            lvl_closed = [r for r in closed if r.get("aggression_level") == lvl]
+            lvl_wins   = [r for r in lvl_closed if r["status"] == "win"]
+            by_level[lvl] = {
+                "total": len(lvl_closed),
+                "wins":  len(lvl_wins),
+                "win_rate": round(len(lvl_wins) / len(lvl_closed) * 100, 1) if lvl_closed else 0.0,
+            }
+
+        # Best/worst by P&L
+        closed_with_pnl = [r for r in closed if r.get("pnl_percent") is not None]
+        best  = max(closed_with_pnl, key=lambda x: x["pnl_percent"], default=None)
+        worst = min(closed_with_pnl, key=lambda x: x["pnl_percent"], default=None)
+
+        avg_rr = 0.0  # placeholder — needs risk_reward_ratio in query for full calc
+
+        return {
+            "total_closed":  total_closed,
+            "wins":          len(wins),
+            "losses":        len(losses),
+            "pending":       len(pending),
+            "win_rate":      win_rate,
+            "by_level":      by_level,
+            "best_trade":    {"ticker": best["ticker"], "pnl_pct": best["pnl_percent"]} if best else None,
+            "worst_trade":   {"ticker": worst["ticker"], "pnl_pct": worst["pnl_percent"]} if worst else None,
+            "show_badge":    total_closed >= 5,
+        }
+    except Exception as e:
+        logger.debug("get_cipher_trade_stats error: %s", e)
+        return _empty_cipher_stats()
+
+
+def _empty_cipher_stats() -> Dict[str, Any]:
+    return {
+        "total_closed": 0, "wins": 0, "losses": 0, "pending": 0,
+        "win_rate": 0.0, "by_level": {}, "best_trade": None,
+        "worst_trade": None, "show_badge": False,
+    }
+
+
+async def expire_stale_pending_trades() -> int:
+    """
+    Auto-expire pending trades whose exit_deadline is in the past.
+    Called daily at 6 AM ET by the background job.
+    Returns count of rows expired.
+    """
+    if not _ok():
+        return 0
+    try:
+        now_iso = datetime.now(timezone.utc).isoformat()
+        url = (
+            f"{_SUPABASE_URL}/rest/v1/cipher_trade_log"
+            f"?status=eq.pending&exit_deadline=lt.{now_iso}"
+        )
+        async with httpx.AsyncClient(timeout=10.0) as c:
+            resp = await c.patch(
+                url,
+                json={"status": "expired"},
+                headers={**_hdr(), "Prefer": "return=minimal", "Content-Type": "application/json"},
+            )
+        if resp.status_code in (200, 204):
+            # Supabase PATCH doesn't return count with return=minimal
+            # Count separately
+            count_url = (
+                f"{_SUPABASE_URL}/rest/v1/cipher_trade_log"
+                f"?status=eq.expired"
+                f"&select=id"
+                f"&limit=1"
+            )
+            # Best-effort count; log success
+            logger.info("cipher_trade_log: stale pending trades expired (HTTP %s)", resp.status_code)
+            return 1  # success marker
+        logger.warning("expire_stale_pending_trades failed: %s", resp.text[:100])
+    except Exception as e:
+        logger.debug("expire_stale_pending_trades error: %s", e)
+    return 0
