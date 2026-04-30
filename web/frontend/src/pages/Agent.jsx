@@ -10,10 +10,92 @@ import toast from 'react-hot-toast'
 const AGG_LABELS = { 1: 'CNSV', 2: 'BAL', 3: 'STD', 4: 'AGG', 5: 'APEX' }
 const AGG_COLORS = { 1: '#00D4FF', 2: '#7DE8A0', 3: '#CCFF00', 4: '#FFB800', 5: '#FF4444' }
 
-// ── Simple inline markdown renderer ─────────────────────────────────────────
-function BriefLine({ line }) {
-  const s = (style, children) => <span style={style}>{children}</span>
+// ── CIPHER trade card field config ───────────────────────────────────────────
+const CIPHER_FIELD_STYLE = {
+  INSTRUMENT:           { label: 'Instrument',      color: 'rgba(255,255,255,0.88)' },
+  CURRENT_PRICE:        { label: 'Price',           color: 'rgba(255,255,255,0.70)' },
+  ENTRY:                { label: 'Entry',           color: '#00D4FF' },
+  TARGET:               { label: 'Target',          color: '#00E879' },
+  STOP:                 { label: 'Stop',            color: '#FF2052' },
+  HORIZON:              { label: 'Horizon',         color: '#FFB800' },
+  RR:                   { label: 'R/R',             color: '#CCFF00' },
+  MAX_LOSS_PER_CONTRACT:{ label: 'Max Loss/Ct',     color: '#FF6B6B' },
+  THESIS:               { label: 'Thesis',          color: 'rgba(255,255,255,0.80)' },
+  KILLS:                { label: 'Kills Trade If',  color: '#FF6B6B' },
+  CONFIRMS:             { label: 'Confirms',        color: '#7DE8A0' },
+}
 
+// ── Markdown + CIPHER structured format renderer ─────────────────────────────
+function BriefLine({ line }) {
+  // ── CIPHER trade header: "TRADE 1: NVDA — EARNINGS_PRE_PRINT" ──
+  const tradeMatch = line.match(/^TRADE (\d+): (.+?) — (.+)$/)
+  if (tradeMatch) {
+    const [, num, ticker, strategy] = tradeMatch
+    return (
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: '10px',
+        marginTop: '20px', marginBottom: '8px',
+        borderLeft: '3px solid #CCFF00', paddingLeft: '10px',
+      }}>
+        <span style={{
+          fontFamily: 'var(--font-data, monospace)', fontSize: '8px', fontWeight: 700,
+          background: '#CCFF00', color: '#000', padding: '2px 6px', letterSpacing: '0.08em', flexShrink: 0,
+        }}>
+          T{num}
+        </span>
+        <span style={{
+          fontFamily: 'var(--font-data, monospace)', fontSize: '13px', fontWeight: 900,
+          color: '#CCFF00', letterSpacing: '0.02em',
+        }}>
+          {ticker}
+        </span>
+        <span style={{
+          fontFamily: 'var(--font-data, monospace)', fontSize: '8px', fontWeight: 700,
+          color: 'rgba(255,255,255,0.35)', letterSpacing: '0.14em', textTransform: 'uppercase',
+          background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.08)',
+          padding: '2px 7px',
+        }}>
+          {strategy.replace(/_/g, ' ')}
+        </span>
+      </div>
+    )
+  }
+
+  // ── CIPHER field line: "ENTRY: $2.50–3.00 [rationale]" ──
+  const colonIdx = line.indexOf(': ')
+  if (colonIdx > 0) {
+    const key = line.slice(0, colonIdx)
+    const fieldCfg = CIPHER_FIELD_STYLE[key]
+    if (fieldCfg) {
+      const value = line.slice(colonIdx + 2)
+      // Split off inline bracket annotation [...]
+      const bracketMatch = value.match(/^([^\[]+?)(\s*\[.+\])?$/)
+      const mainVal = bracketMatch ? bracketMatch[1].trim() : value
+      const annotation = bracketMatch?.[2]?.trim()
+      return (
+        <div style={{
+          display: 'grid', gridTemplateColumns: '110px 1fr',
+          gap: '8px', alignItems: 'baseline',
+          padding: '4px 0', borderBottom: '1px solid rgba(255,255,255,0.03)',
+          fontFamily: 'var(--font-data, monospace)',
+        }}>
+          <span style={{ fontSize: '8px', color: 'rgba(255,255,255,0.28)', letterSpacing: '0.14em', textTransform: 'uppercase', fontWeight: 700 }}>
+            {fieldCfg.label}
+          </span>
+          <span style={{ fontSize: '11px', color: fieldCfg.color, lineHeight: 1.55 }}>
+            {mainVal}
+            {annotation && (
+              <span style={{ fontSize: '9px', color: 'rgba(255,255,255,0.30)', marginLeft: '6px' }}>
+                {annotation}
+              </span>
+            )}
+          </span>
+        </div>
+      )
+    }
+  }
+
+  // ── Markdown: ## header ──
   if (line.startsWith('## ')) {
     return (
       <p style={{
@@ -25,6 +107,7 @@ function BriefLine({ line }) {
       </p>
     )
   }
+  // ── Markdown: ### header ──
   if (line.startsWith('### ')) {
     return (
       <p style={{
@@ -36,6 +119,7 @@ function BriefLine({ line }) {
       </p>
     )
   }
+  // ── Markdown: bullet ──
   if (line.startsWith('- ') || line.startsWith('* ')) {
     return (
       <p style={{ fontFamily: 'var(--font-data, monospace)', fontSize: '11px', color: 'rgba(255,255,255,0.70)', lineHeight: 1.65, marginBottom: '2px', paddingLeft: '12px' }}>
@@ -44,6 +128,7 @@ function BriefLine({ line }) {
       </p>
     )
   }
+  // ── Markdown: *italic wrapper* ──
   if (line.startsWith('*') && line.endsWith('*') && !line.startsWith('**')) {
     return (
       <p style={{ fontFamily: 'var(--font-data, monospace)', fontSize: '10px', color: 'rgba(255,255,255,0.28)', fontStyle: 'italic', marginTop: '16px' }}>
@@ -51,9 +136,24 @@ function BriefLine({ line }) {
       </p>
     )
   }
+  // ── ⚠ Validation warning line ──
+  if (line.startsWith('⚠') || line.startsWith('✅') || line.startsWith('⚡')) {
+    return (
+      <p style={{
+        fontFamily: 'var(--font-data, monospace)', fontSize: '9px',
+        color: '#FFB800', background: 'rgba(255,184,0,0.06)',
+        border: '1px solid rgba(255,184,0,0.18)', padding: '4px 8px',
+        marginTop: '6px', lineHeight: 1.5,
+      }}>
+        {line}
+      </p>
+    )
+  }
+  // ── Divider ──
   if (line === '—' || line === '---') {
     return <div style={{ height: '1px', background: 'rgba(255,255,255,0.06)', margin: '16px 0' }} />
   }
+  // ── Empty line ──
   if (!line.trim()) return <div style={{ height: '8px' }} />
 
   return (
