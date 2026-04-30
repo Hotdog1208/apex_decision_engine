@@ -46,13 +46,20 @@ async function fetchApi(path) {
 
 async function postApi(path, body) {
   const headers = { 'Content-Type': 'application/json', ...getAuthHeaders() }
-  const res = await fetch(`${API_BASE}${path}`, {
-    method: 'POST',
-    headers,
-    body: body ? JSON.stringify(body) : undefined,
-  })
-  if (!res.ok) throw new Error(await parseErrorResponse(res))
-  return res.json()
+  try {
+    const res = await fetch(`${API_BASE}${path}`, {
+      method: 'POST',
+      headers,
+      body: body ? JSON.stringify(body) : undefined,
+    })
+    if (!res.ok) throw new Error(await parseErrorResponse(res))
+    return res.json()
+  } catch (e) {
+    if (e.message === 'Failed to fetch' || e.name === 'TypeError') {
+      throw new Error('Backend unreachable. Is the API server running?')
+    }
+    throw e
+  }
 }
 
 async function putApi(path, body) {
