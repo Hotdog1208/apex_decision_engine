@@ -15,6 +15,11 @@ import re
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 import anthropic  # type: ignore
+from market_calendar import (
+    get_trading_calendar_context,
+    is_valid_trading_day,
+    nearest_valid_friday_expiry,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +78,10 @@ R4. Your output is parsed by code before reaching the user. Expiry/exit date con
 R5. Strategy type declaration: Every trade must begin TRADE [N]: [TICKER] — [STRATEGY_TYPE] where STRATEGY_TYPE is exactly one of: EARNINGS_PRE_PRINT | EARNINGS_POST_CRUSH | MERGER_ARB | TECHNICAL_BREAKOUT | MOMENTUM | MEAN_REVERSION | VOLATILITY_SPREAD | MACRO_CATALYST
 R6. Position sizing: Max 5% per trade. Options on sub-$10 stocks: max 2%. Iron condors: max 3%.
 R7. Use get_stock_quote for EVERY ticker before stating any entry price. Web article prices may be hours stale.
+R8. Strike selection: Directional calls/puts → delta 0.35–0.55. Breakout-only plays → delta 0.20–0.35. Never pick a strike that requires the stock to break ATH or key resistance by more than 1% to reach target. Always state DELTA_EST and PROB_PROFIT explicitly.
+R9. Macro coherence: Before finalizing any trade, run 4-step second-order check: (1) Fed trajectory vs trade direction, (2) USD/sector rotation alignment, (3) earnings risk within HORIZON window, (4) VIX regime vs premium paid. If unresolved tension exists, state it in THESIS.
+R10. Self-correction: If you detect a logical error mid-response, silently fix it. No footnote corrections, no "actually" revisions after completing a card. Regenerate cleanly.
+R11. Horizon match: EARNINGS_PRE_PRINT → exit before print, never on expiry day. EARNINGS_POST_CRUSH → next morning open after print. MERGER_ARB → 30+ days, state spread-to-close. TECHNICAL_BREAKOUT → 5–15 day hold, specific date. MOMENTUM → 1–5 days, time-of-day exit. MEAN_REVERSION → hold to target OR stop, 3–10 days. VOLATILITY_SPREAD → hold to expiry or 50% max profit.
 
 AGGRESSION_LEVEL: {AGGRESSION_LEVEL} — {AGGRESSION_NAME}
 RULES: {AGGRESSION_INSTRUCTIONS}
@@ -94,6 +103,8 @@ STOP: $X.XX [what breaks the thesis]
 HORIZON: [specific date and time, e.g. "Close by Fri May 2 4PM ET" — always include PRE/POST-PRINT if options]
 RR: X:1 [verified math — show max profit and max loss for spreads]
 MAX_LOSS_PER_CONTRACT: $X [options/spreads only]
+DELTA_EST: X.XX [option delta at entry strike; N/A for stocks]
+PROB_PROFIT: XX% [estimated probability of reaching target]
 THESIS: [3–4 sentences. Lead with the catalyst. Include specific numbers from context.]
 KILLS: [one specific scenario that invalidates the thesis]
 CONFIRMS: [one price action signal that says thesis is intact]
@@ -139,6 +150,49 @@ _TRADE_KEYWORDS = re.compile(
     r'catalyst|earnings|breakout|momentum|condor|spread|arb|arbitrage)\b',
     re.IGNORECASE,
 )
+
+# ── FOMC schedule 2026 (hard-coded, update annually) ─────────────────────────
+_FOMC_2026 = [
+    date(2026, 1, 29), date(2026, 3, 19), date(2026, 5, 7),  date(2026, 6, 18),
+    date(2026, 7, 30), date(2026, 9, 17), date(2026, 10, 29), date(2026, 12, 10),
+]
+_FED_FUNDS_RATE = "4.50%"
+
+
+def _get_next_fomc() -> str:
+    today = date.today()
+    upcoming = [d for d in _FOMC_2026 if d >= today]
+    if not upcoming:
+        return f"FED: Rate={_FED_FUNDS_RATE} | No more 2026 FOMC meetings"
+    nxt = upcoming[0]
+    return f"FED: Next FOMC {nxt.strftime('%b %d')} ({(nxt - today).days}d away) | Rate={_FED_FUNDS_RATE}"
+
+
+def _get_finnhub_earnings(today_str: str, tomorrow_str: str) -> List[str]:
+    """Fetch AH-today and BMO-tomorrow earnings from Finnhub. Best-effort, 2s timeout."""
+    token = os.environ.get("FINNHUB_API_KEY", "")
+    if not token:
+        return []
+    try:
+        import httpx  # type: ignore
+        url = (
+            f"https://finnhub.io/api/v1/calendar/earnings"
+            f"?from={today_str}&to={tomorrow_str}&token={token}"
+        )
+        r = httpx.get(url, timeout=2.0)
+        if r.status_code != 200:
+            return []
+        cal = r.json().get("earningsCalendar", [])
+        ah  = [e["symbol"] for e in cal if e.get("date") == today_str    and "amc" in (e.get("hour") or "")]
+        bmo = [e["symbol"] for e in cal if e.get("date") == tomorrow_str and "bmo" in (e.get("hour") or "")]
+        result = []
+        if ah:
+            result.append(f"EARNINGS_AH_TODAY: {', '.join(ah[:8])}")
+        if bmo:
+            result.append(f"EARNINGS_BMO_TOMORROW: {', '.join(bmo[:8])}")
+        return result
+    except Exception:
+        return []
 
 
 # ── Date / float helpers ──────────────────────────────────────────────────────
@@ -297,6 +351,17 @@ def parse_cipher_output(raw_text: str) -> List[Dict[str, Any]]:
         if ml_m:
             trade["max_loss_per_contract"] = _parse_float(ml_m.group(1))
 
+        # DELTA_EST
+        de_m = re.search(r'DELTA.EST\s*[:\|▸]?\s*([0-9.]+|N/A)', block, re.IGNORECASE)
+        if de_m:
+            val = de_m.group(1).strip()
+            trade["delta_est"] = None if val.upper() == "N/A" else _parse_float(val)
+
+        # PROB_PROFIT
+        pp_m = re.search(r'PROB.PROFIT\s*[:\|▸]?\s*([0-9.]+)\s*%?', block, re.IGNORECASE)
+        if pp_m:
+            trade["prob_profit"] = _parse_float(pp_m.group(1))
+
         trades.append(trade)
 
     return trades
@@ -362,6 +427,18 @@ def validate_cipher_trade(trade: Dict[str, Any]) -> List[str]:
                 f"INVERTED_RR: Risk (${risk:.2f}) is larger than reward (${reward:.2f}). "
                 f"R/R is less than 1:1. Reconsider entry, target, or stop."
             )
+
+    # Rule 5: Options expiry must be a valid trading Friday
+    if trade.get("instrument_type") in ("option", "spread"):
+        expiry = trade.get("expiry_date")
+        if expiry:
+            if expiry.weekday() != 4 or not is_valid_trading_day(expiry):
+                nearest = nearest_valid_friday_expiry(expiry)
+                errors.append(
+                    f"INVALID_EXPIRY: {expiry.strftime('%a %b %d %Y')} is not a valid options expiry. "
+                    f"Options expire on valid trading Fridays only. "
+                    f"Nearest valid expiry: {nearest.strftime('%a %b %d %Y')}."
+                )
 
     return errors
 
@@ -446,7 +523,13 @@ def build_cipher_context(symbols: Optional[List[str]] = None) -> str:
             f"MARKET_SNAPSHOT [{ts_str}]",
             f"{_fmt('SPY')} {_fmt('QQQ')} {_fmt('VIX')} DXY:{macro.get('DXY',{}).get('p',0):.2f} 10Y:{macro.get('10Y',{}).get('p',0):.2f}%",
             f"SESSION:{session} OIL:{macro.get('OIL',{}).get('p',0):.2f}({'↑' if macro.get('OIL',{}).get('c',0)>0 else '↓'}{abs(macro.get('OIL',{}).get('c',0)):.1f}%)",
+            _get_next_fomc(),
         ]
+
+        # Finnhub earnings (best-effort, 2s timeout)
+        today_str    = now_et.strftime("%Y-%m-%d")
+        tomorrow_str = (now_et + timedelta(days=1)).strftime("%Y-%m-%d")
+        lines.extend(_get_finnhub_earnings(today_str, tomorrow_str))
 
         # Per-symbol compact data
         if symbols:
@@ -475,11 +558,20 @@ def build_cipher_context(symbols: Optional[List[str]] = None) -> str:
                         last_vol = hist["Volume"].iloc[-1]
                         vol_ratio = round(last_vol / avg_vol, 1) if avg_vol > 0 else 1.0
 
-                    lines.append(f"{sym}:${price:.2f}({chg:+.1f}%) RSI:{rsi:.0f} VOL:{vol_ratio:.1f}x")
+                    # ATH proximity
+                    year_high = float(getattr(fi, "year_high", 0) or 0)
+                    ath_label = ""
+                    if year_high > 0:
+                        ath_pct = round((price - year_high) / year_high * 100, 1)
+                        ath_label = f" ATH:{year_high:.2f}({ath_pct:+.1f}%)"
+
+                    lines.append(f"{sym}:${price:.2f}({chg:+.1f}%) RSI:{rsi:.0f} VOL:{vol_ratio:.1f}x{ath_label}")
                 except Exception:
                     lines.append(f"{sym}: N/A")
 
-        return "\n".join(lines)
+        # Prepend calendar context so CIPHER always knows valid expiry dates
+        cal_ctx = get_trading_calendar_context()
+        return cal_ctx + "\n" + "\n".join(lines)
 
     except Exception as exc:
         logger.warning("build_cipher_context failed: %s", exc)
