@@ -20,16 +20,18 @@ const TRADE_FIELDS = {
   HORIZON:               { label: 'Horizon',       color: '#FFB800' },
   RR:                    { label: 'R/R',           color: '#CCFF00' },
   MAX_LOSS_PER_CONTRACT: { label: 'Max Loss/Ct',   color: '#FF6B6B' },
+  DELTA_EST:             { label: 'Delta Est.',    color: 'rgba(255,255,255,0.65)' },
+  PROB_PROFIT:           { label: 'Prob. Profit',  color: '#7DE8A0' },
   THESIS:                { label: 'Thesis',        color: 'rgba(255,255,255,0.82)' },
-  KILLS:                 { label: 'Kills If',      color: '#FF6B6B' },
-  CONFIRMS:              { label: 'Confirms',      color: '#7DE8A0' },
+  KILLS:                 { label: 'Kills If',      color: '#FF6B6B',  small: true },
+  CONFIRMS:              { label: 'Confirms',      color: '#7DE8A0',  small: true },
 }
 const TRADE_FIELD_KEYS = new Set(Object.keys(TRADE_FIELDS))
 
 // Parse the lines inside a --- block into a structured trade object.
 // Handles multi-line THESIS by collecting continuation lines until the next field.
 function parseTradeBlock(lines) {
-  const result = { header: null, fields: [] }
+  const result = { header: null, fields: [], disclaimer: null }
   let activeKey = null
   let activeVal = []
 
@@ -37,7 +39,7 @@ function parseTradeBlock(lines) {
     if (!activeKey) return
     const joined = activeVal
       .map(l => l.trim())
-      .filter(l => l !== '.' && l !== '')   // strip orphaned period lines
+      .filter(l => l.trim() !== '.' && l.trim() !== '')
       .join(' ')
       .replace(/\s{2,}/g, ' ')
       .trim()
@@ -47,6 +49,12 @@ function parseTradeBlock(lines) {
   }
 
   for (const line of lines) {
+    // Disclaimer lines
+    if (line.startsWith('⚠') || /intelligence only|not financial advice/i.test(line)) {
+      flush()
+      result.disclaimer = line
+      continue
+    }
     // Trade header: "TRADE 1: NVDA — EARNINGS_PRE_PRINT"
     const hm = line.match(/^TRADE (\d+):\s*(.+?)\s*—\s*(.+)$/)
     if (hm) {
@@ -73,7 +81,7 @@ function parseTradeBlock(lines) {
 
 // Styled card for one CIPHER trade block
 function TradeCard({ lines }) {
-  const { header, fields } = parseTradeBlock(lines)
+  const { header, fields, disclaimer } = parseTradeBlock(lines)
   if (!header && fields.length === 0) return null
 
   return (
@@ -84,6 +92,9 @@ function TradeCard({ lines }) {
       padding: '16px 18px',
       marginTop: '14px',
       marginBottom: '14px',
+      overflow: 'hidden',
+      width: '100%',
+      boxSizing: 'border-box',
     }}>
       {/* ── Trade header ── */}
       {header && (
@@ -100,7 +111,7 @@ function TradeCard({ lines }) {
             T{header.num}
           </span>
           <span style={{
-            fontFamily: 'var(--font-display, sans-serif)', fontSize: '16px', fontWeight: 900,
+            fontFamily: 'var(--font-display, sans-serif)', fontSize: '17px', fontWeight: 900,
             color: '#CCFF00', letterSpacing: '-0.01em',
           }}>
             {header.ticker}
@@ -126,6 +137,8 @@ function TradeCard({ lines }) {
           const bm = value.match(/^([^\[]+?)(\s*\[.+\])?$/)
           const mainVal = bm ? bm[1].trim() : value
           const annotation = bm?.[2]?.trim()
+          const labelSize = cfg.small ? '11px' : '13px'
+          const valueSize = cfg.small ? '13px' : '14px'
 
           if (key === 'THESIS') {
             return (
@@ -133,7 +146,7 @@ function TradeCard({ lines }) {
                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '5px' }}>
                   <span style={{ color: '#CCFF00', fontSize: '11px', flexShrink: 0 }}>▸</span>
                   <strong style={{
-                    fontFamily: 'var(--font-data, monospace)', fontSize: '9px', fontWeight: 700,
+                    fontFamily: 'var(--font-data, monospace)', fontSize: '13px', fontWeight: 700,
                     color: 'rgba(255,255,255,0.40)', letterSpacing: '0.12em', textTransform: 'uppercase',
                     whiteSpace: 'nowrap',
                   }}>
@@ -141,9 +154,10 @@ function TradeCard({ lines }) {
                   </strong>
                 </div>
                 <p style={{
-                  fontFamily: 'var(--font-data, monospace)', fontSize: '11px',
-                  color: 'rgba(255,255,255,0.82)', lineHeight: 1.6,
+                  fontFamily: 'var(--font-data, monospace)', fontSize: '14px',
+                  color: 'rgba(255,255,255,0.82)', lineHeight: 1.7,
                   margin: 0, paddingLeft: '18px',
+                  wordBreak: 'break-word', overflowWrap: 'anywhere',
                 }}>
                   {value}
                 </p>
@@ -158,13 +172,13 @@ function TradeCard({ lines }) {
               }}>▸</span>
               <span style={{ fontFamily: 'var(--font-data, monospace)', lineHeight: 1.45 }}>
                 <strong style={{
-                  fontSize: '9px', fontWeight: 700,
+                  fontSize: labelSize, fontWeight: 700,
                   color: 'rgba(255,255,255,0.40)', letterSpacing: '0.12em',
                   textTransform: 'uppercase', whiteSpace: 'nowrap', marginRight: '6px',
                 }}>
                   {cfg.label}:
                 </strong>
-                <span style={{ fontSize: '11px', color: cfg.color }}>
+                <span style={{ fontSize: valueSize, color: cfg.color, wordBreak: 'break-word', overflowWrap: 'anywhere' }}>
                   {mainVal}
                 </span>
                 {annotation && (
@@ -177,6 +191,18 @@ function TradeCard({ lines }) {
           )
         })}
       </div>
+
+      {/* ── Disclaimer ── */}
+      {disclaimer && (
+        <p style={{
+          fontFamily: 'var(--font-data, monospace)', fontSize: '11px',
+          color: 'rgba(255,255,255,0.50)', fontStyle: 'italic',
+          marginTop: '12px', paddingTop: '8px',
+          borderTop: '1px solid rgba(255,255,255,0.04)',
+        }}>
+          {disclaimer}
+        </p>
+      )}
     </div>
   )
 }
