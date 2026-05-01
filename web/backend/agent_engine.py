@@ -15,11 +15,18 @@ import re
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 import anthropic  # type: ignore
-from market_calendar import (
-    get_trading_calendar_context,
-    is_valid_trading_day,
-    nearest_valid_friday_expiry,
-)
+try:
+    from market_calendar import (
+        get_trading_calendar_context,
+        is_valid_trading_day,
+        nearest_valid_friday_expiry,
+    )
+except ImportError:
+    from web.backend.market_calendar import (  # type: ignore
+        get_trading_calendar_context,
+        is_valid_trading_day,
+        nearest_valid_friday_expiry,
+    )
 
 logger = logging.getLogger(__name__)
 
